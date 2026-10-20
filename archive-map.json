@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "updated": "2026-10-20",
+  "repo": "https://github.com/henrymak246/personal-ai-archive",
+  "raw_base": "https://raw.githubusercontent.com/henrymak246/personal-ai-archive/main/",
+  "owner": "{{你的名字}}",
+  "conventions": {
+    "AI-READONLY": "AI 只读，修改需本人明确指令",
+    "AI-WRITABLE": "AI 可追加记录，禁止删改已有条目",
+    "placeholder": "{{双花括号}} 为待填占位符",
+    "date_format": "YYYY-MM-DD"
+  },
+  "files": [
+    { "path": "identity/identity-core.md",       "tag": "AI-READONLY", "title": "个人身份核心信息" },
+    { "path": "identity/life-goals.md",          "tag": "AI-READONLY", "title": "人生目标与长期方向" },
+    { "path": "workflow/work-habits.md",         "tag": "AI-READONLY", "title": "工作习惯" },
+    { "path": "workflow/tools.md",               "tag": "AI-READONLY", "title": "常用工具与环境" },
+    { "path": "workflow/communication-style.md", "tag": "AI-READONLY", "title": "沟通风格" },
+    { "path": "workflow/priority-rules.md",      "tag": "AI-READONLY", "title": "任务优先级规则" },
+    { "path": "memory/experiences.md",           "tag": "AI-WRITABLE", "title": "历史经验与教训" },
+    { "path": "memory/decisions.md",             "tag": "AI-WRITABLE", "title": "重要决策记录" },
+    { "path": "memory/preferences.md",           "tag": "AI-WRITABLE", "title": "AI 对话沉淀的个人偏好" },
+    { "path": "skills/mastered.md",              "tag": "AI-WRITABLE", "title": "已掌握的技能" },
+    { "path": "skills/learning-plan.md",         "tag": "AI-WRITABLE", "title": "学习计划" },
+    { "path": "skills/to-improve.md",            "tag": "AI-WRITABLE", "title": "待提升能力清单" },
+    { "path": "archive/README.md",               "tag": "AI-WRITABLE", "title": "归档区说明与索引" }
+  ]
+}

@@ -86,3 +86,12 @@
 【教训】新建账号完整性终验清单(角色之外逐项查):①USR01-DATFM/DCPFM(组织标准, 本例 4=年.月.日/X=1,234.56);②登录语言 LANGU(经 BAPI_USER_GET_DETAIL 的 DEFAULTS 读);③ADDRESS-NAMCOUNTRY/NAMEFORMAT(中文名须 CN/01, 否则部分界面姓名顺序错);④SET/GET 参数 USR05(对照同岗位参照人——本例采购岗三人一致 BSA=ANB/BUK=G0F0/EXP=X/SCL=X;参照人参数分裂时不要替用户猜,留空上报);⑤密码状态: 新号按统一初始密码并实测 RFC 认证(认证通过但无 S_RFC 时 open 报 "No RFC authorization for RFCPING"=成功签名;PWDSTATE=1 首登强制改密), 老号改过密(PWDSTATE=255)不要用默认密码覆盖;⑥有效期/锁定态。技术小坑: 自研 ctypes RFC 封装常缺结构字段写入方法——RfcSetChars 对结构句柄同样适用,可直接复用表行写入函数;BAPI_USER_CHANGE 的 RETURN 是表参数不是结构(按表读 TYPE/NUMBER/MESSAGE)。
 
 【复用建议】接手工单时默认"前一手只做了半套":角色校正后必须跑一遍上述六项完整性终验,把显示格式/参数/密码状态补齐,才叫"新建用户"真正闭环。
+## 2026-11-03: 君正 S4P 巡检——RFC 直连打通后 OS/DB 数据通道全套踩坑
+
+【背景】君正 S4P(S/4HANA 1709/kernel 753)月度巡检, 此前只能经 S4D GUI 中转且 S4P 侧白名单收紧。11-03 网络路由修复+口令恢复后, pyrfc 直连 10.1.8.3(client 800, basis)全通, 完成 9/10 月两份报告; 10月 ABAP Dump 33,623 次激增(8月 14,809 后复发, 11月1-3日又 5,788)是核心发现。
+
+【教训-通道面】1)SWNC 数据源: S4HANA 1709 无 USERTCODE/TABLEREC(直接 RFC_READ_TABLE 报 TABLE_NOT_AVAILABLE), 正确姿势=SWNC_GET_AGGREGATES_FRAME(INSTANCE=TOTAL, PERIODTYPE=M)一次性拿到 TASKTYPE/TASKTIMES/TIMES/USERTCODE/USERWORKLOAD/SPOOL/FRONTEND 全套月聚合; 坑: TASKTYPE 是 RAW(1) bytes(b''), 比较要用 .hex(); pyrfc 返回的 DEC 是 Decimal, json.dump 会炸, 序列化前转 float。2)OS 通道: ST06_GET_CPU_ALL 等老函数在 S4HANA 已删除(FU_NOT_FOUND); CCMS BAPI_SYSTEM_MTE_GETTREE 返回 0 节点(S4HANA 走 MAI 不建 RZ20 树); 真正的 OS 通道=**RZL_READ_FILE_LOCAL** 直接读应用机任意文件(/proc/meminfo、/proc/loadavg、/etc/os-release 全可读, 返回 LINE_TBL 表)——用 /proc 就拿到了内存/负载/CPU/挂载点真实数据。3)SXPG_COMMAND_EXECUTE 在 SM69 无白名单时 COMMAND_NOT_FOUND, 拿不到 shell; DB 层(M_VOLUME_FILES/大小/备份)无 RFC 函数可执行 SQL(DB_EXECUTE_SQL 存在但非 remote), 仍需 hdbsql/SSH。4)SDBAH 备份历史表在 client 000 而连接在 800——且**试探 client 000 登录两次失败就把 basis 在该客户端锁死了**(too many failed attempts), 教训: 未知客户端先确认账号锁定策略再试密码。5)SNAP 保留期约 30 天(11-03 查 10-01~05 已重组, 2021 年 XHOLD 老 dump 仍在), 历史 dump 数过期即不可回溯, 巡检要当月做。
+
+【教训-GUI 面】6)GUI 直连 S4P 首次打通(sapshcut /H/10.1.8.3/S/3202, 网络通后 DIAG 3202 就通); 新 ST06(操作系统监控器)是 SAPGridViewCtrl ActiveX: COM 读格子必须 GetCellValue(row, '列名')(列名如 SECTION, int 下标全报错), 值列名难枚举; 菜单「环境→旧 ST06/旧 OS07」是经典 dynpro 纯 GuiLabel 屏(按 lbl[r,c] 解析), 只有 CPU/内存/Swap/磁盘概览, 无文件系统段; 弹窗选 SAPOSCOL 模板可切 s4prd1/s4prd2; GuiWindow.HardCopyToFile 在老屏失败时用 gcyc 方案 PrintWindow(hwnd, hdc, 2) 无干扰截图。7)WinRT OCR 脚本(ocr_winrt.ps1)当天系统性坏(所有 PNG 报 Wait 异常), 验证改走 fitz 抽 PDF 文本对拍关键词(注意换行碎片, 匹配用短片段)。
+
+【复用建议】巡检三通道口诀: 负载类=SWNC_GET_AGGREGATES_FRAME; OS 类=RZL_READ_FILE_LOCAL 读 /proc; 事务类=GUI 旧屏 lbl 解析/新屏按列名取格。报告生成沿用 july_template_fixed.docx 段落索引模板(见 C:	mpuild_reports.py), 验证=fitZ 文本对拍而非 OCR。

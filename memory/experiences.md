@@ -95,3 +95,10 @@
 【教训-GUI 面】6)GUI 直连 S4P 首次打通(sapshcut /H/10.1.8.3/S/3202, 网络通后 DIAG 3202 就通); 新 ST06(操作系统监控器)是 SAPGridViewCtrl ActiveX: COM 读格子必须 GetCellValue(row, '列名')(列名如 SECTION, int 下标全报错), 值列名难枚举; 菜单「环境→旧 ST06/旧 OS07」是经典 dynpro 纯 GuiLabel 屏(按 lbl[r,c] 解析), 只有 CPU/内存/Swap/磁盘概览, 无文件系统段; 弹窗选 SAPOSCOL 模板可切 s4prd1/s4prd2; GuiWindow.HardCopyToFile 在老屏失败时用 gcyc 方案 PrintWindow(hwnd, hdc, 2) 无干扰截图。7)WinRT OCR 脚本(ocr_winrt.ps1)当天系统性坏(所有 PNG 报 Wait 异常), 验证改走 fitz 抽 PDF 文本对拍关键词(注意换行碎片, 匹配用短片段)。
 
 【复用建议】巡检三通道口诀: 负载类=SWNC_GET_AGGREGATES_FRAME; OS 类=RZL_READ_FILE_LOCAL 读 /proc; 事务类=GUI 旧屏 lbl 解析/新屏按列名取格。报告生成沿用 july_template_fixed.docx 段落索引模板(见 C:	mpuild_reports.py), 验证=fitZ 文本对拍而非 OCR。
+## 2026-11-03 续: 君正 ST06 文件系统属性打通——CCMS 模板视图才是正解(用户纠正"st06有文件系统属性")
+
+【背景】用户指出 ST06 有文件系统数据, 但旧 ST06/OS07(环境菜单)实测只有 CPU/内存/Swap/磁盘概览(纯 GuiLabel 静态屏); 新 ST06 右侧 GridViewCtrl 值列 COM 读不出(仅 SECTION 列可读, int 下标/常见列名全报错); 左侧树是 TableTree GuiShell, F4/ENTER/方向键全无效。
+
+【正解】新 ST06 左下角第二棵树(比顶部树高得多, 606px)双击第 4 行→进入「SAP CCMS Monitor Templates (Operating System)」经典 dynpro(RZ20 视图「当前系统状态」): ①必须先 SetWindowPos 把窗口放大到 1600x1000, 否则 dynpro 下半内容(树+值)被窗口裁掉看不见; ②菜单 编辑→树→展开树→展开子树 展开全部; ③文件系统数据以**多列网格标签**渲染(6 列×N 行: 表头 r22 是 Name/Freespace/Percentage_Used 重复 6 组, 值在 r41, 状态行 r49/r55 ", 绿色 时间戳"), 按 lbl[r,c] 坐标解析即得: s4prd1 六个挂载点全绿色(/ 16%、/run 2%、/dev/shm 91.6GB 空闲等)。④服务器切换=顶部 chk 复选框(s4prd1/s4prd2), 查找弹窗(编辑→查找, txtRSYSF-STRING)可用但"仅在当前页"限制; /usr/sap 无值=采集器不报该挂载。
+
+【复用建议】S4HANA 巡检文件系统数据的三级正解: 新 ST06→左下树第4行→CCMS 模板 dynpro→放大窗口+展开子树+按坐标解析标签网格。经验归档见 [[worklog_2026-11-03_jz_st06_fs]]。

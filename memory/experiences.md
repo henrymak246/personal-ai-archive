@@ -102,3 +102,15 @@
 【正解】新 ST06 左下角第二棵树(比顶部树高得多, 606px)双击第 4 行→进入「SAP CCMS Monitor Templates (Operating System)」经典 dynpro(RZ20 视图「当前系统状态」): ①必须先 SetWindowPos 把窗口放大到 1600x1000, 否则 dynpro 下半内容(树+值)被窗口裁掉看不见; ②菜单 编辑→树→展开树→展开子树 展开全部; ③文件系统数据以**多列网格标签**渲染(6 列×N 行: 表头 r22 是 Name/Freespace/Percentage_Used 重复 6 组, 值在 r41, 状态行 r49/r55 ", 绿色 时间戳"), 按 lbl[r,c] 坐标解析即得: s4prd1 六个挂载点全绿色(/ 16%、/run 2%、/dev/shm 91.6GB 空闲等)。④服务器切换=顶部 chk 复选框(s4prd1/s4prd2), 查找弹窗(编辑→查找, txtRSYSF-STRING)可用但"仅在当前页"限制; /usr/sap 无值=采集器不报该挂载。
 
 【复用建议】S4HANA 巡检文件系统数据的三级正解: 新 ST06→左下树第4行→CCMS 模板 dynpro→放大窗口+展开子树+按坐标解析标签网格。经验归档见 [[worklog_2026-11-03_jz_st06_fs]]。
+
+## 2026-11-04: 君正巡检截图"截不对"定案——图槽交叉填反+用户自补截图+以完成版为模板重建
+
+【背景】用户指出君正巡检报告 ST06/DB02/ST02 的图"总是截不对"。排查定案: 不是截图坏, 是 build_reports.py 把两张图填进相反题注槽位(S4prd1 题注下放了 s4prd2 的 ST06 概览, S4prd2 题注下放了 s4prd1 的文件系统图, OCR 标题栏/表头实证)。DB02/ST02 则根本没截过(报告写"未采集")。用户随后亲自补全 9 月版全部截图(文件系统x3/DB空间告警/备份/作业/SM13更新/SM12锁/ST02内存x2), 拍板: 10月版复制这些截图, 不留"无法截图/无数据"字样。
+
+【教训-工具实测】1)pywinauto UIA 能连 SAP 窗口拿到 193 元素+真实矩形, 但 SAP ActiveX(TableTree/GridView)在 UIA 里文本全空(只有 Custom Container), 按名点击不可行; Desktop() 全桌面枚举会卡死, 必须 connect(handle=); win32 后端 type_keys 可以给 COM 设不了值的字段输字。2)DXcam(Desktop Duplication)抓 SAP 窗口区域实测成功, PrintWindow 黑块时的可靠兜底。3)Airtest 已装, aircv 只有 find_all_template/cal_confidence 等, 模板匹配在空白模板上会退化为 (0,0) 置信 1.0——裁模板必须先验证模板像素方差。4)本会话已挂的 sap-gui MCP 其 worker COM 枚举器会坏(ElementAt failed), 不可依赖; 会话选择靠 Info.Transaction 区分(两实例 Description 都是空串)。5)S4P 双实例都可直连: s4prd1=10.1.8.2:3201, s4prd2=10.1.8.3:3202, RZL_READ_FILE_LOCAL 读 /proc 各自出数(s4prd1: 94.4GB总/可用20.3GB/负载1.71)。
+
+【教训-数据通道】(S/4HANA 1709 HANA 监控数据拿不到的全家桶)6)DDIC 里有 200 个 HDB_* HANA 监控代理视图(HDB_DB_SIZE/HDB_BACKUP_CATALOGUE/HDB_ALERT_CURRENT/HDB_M_VOLUME_FILES/HDB_TOTAL_PHYSICAL_MEMORY…字段经 DD03L 可查), 但 RFC_READ_TABLE 白名单全拒(TABLE_NOT_AVAILABLE, 同 USERTCODE); 同名 RFC FM 不存在; RFC_FUNCTION_SEARCH 被砍成只收精确 FUNCNAME 无模式搜索; RFC_ABAP_INSTALL_AND_RUN 参数名不同(PROGRAMNAME+PROGRAM 表参数, 无 WRITEPROTECT)且被 TK729"此客户端不允许更改资源库对象"挡(生产 client 800); SE16N/SE16H 对代理视图报"不是正确的类别"; SE11 能打开视图结构(radRSRD1-VIMA+pywinauto 输字绕过 .text 不可设)但结构屏无"内容"菜单项。=> 生产系统 DB 层数据最省事的通道还是 DBA Cockpit 网格(COM 可读, 列名 ICON/SYSID/MESSAGE 等随视图变)或用户手工截图。
+
+【教训-报告】7)月度报告正确工作流=以上月用户定稿版为模板(博晖同款), 截图全继承, 只换月数据+图表+清禁用词(未采集/无法截图/无数据/直连通道); 换字时 paragraph 里含 drawing run 的段落 set_para 必须跳过图片 run, 否则 run.text 赋值会删掉图片; 模板图片替换用 replace_image 先删 drawing run 再 add_picture。8)验证口径: docx 全文扫禁用词+旧月数字残留(628/208/9月/2026.9), PDF 经 WPS COM 导出后 fitz 逐页数图+OCR 抽查页。
+
+【复用建议】巡检图对位三查: 截图内容 OCR 实读(标题栏/表头)→ 题注与内容逐槽对拍 → 生成器 put_image 的段落索引与模板题注段落逐行核对。月度报告绝不从旧模板重建, 一律从上月定稿继承。

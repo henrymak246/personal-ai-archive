@@ -122,3 +122,13 @@
 【教训】1)优先级实证: settings.json env 块**有的键**会覆盖 shell export(BASE_URL/AUTH_TOKEN/ANTHROPIC_DEFAULT_*_MODEL 实测被覆盖成网关值), **没有的键**会从 shell 穿透(ANTHROPIC_MODEL/CLAUDE_CODE_SUBAGENT_MODEL)——"settings.json 看起来配好了"≠生效, 必须对每个关键键逐一核对来源。2)环境变量优先级高于 settings.json 的 model 字段, 这是 Claude Code 明文行为(/model 输出原话)。3)排障顺序: 先查 settings.json → 再查注册表用户/系统环境 → 最后 shell profile(bashrc/bash_profile), 本例前两层都干净差点漏掉第三层。4)已运行会话的进程环境在启动时注入, 改完配置当会话 bash 仍见旧值, 验证要用 `env -i bash -c 'source ~/.bashrc; echo $VAR'` 模拟新会话。5)顺带根除隐患: 旧块里还有已过期/限额的 DeepSeek 直连 key + BASE_URL, 一旦 settings.json env 缺键就会静默回退直连(即本机 402 复发的潜在路径之一)。
 
 【复用建议】任何"配置改了但不生效"类问题: 列全该配置的所有可能来源(项目 settings → 用户 settings → env 块 → shell profile → 注册表 → 启动器脚本), 逐一 grep 变量名, 找出未被上层覆盖的穿透键; 修复后用干净环境(env -i)重 source 验证。
+
+## 2026-11-04: 广药新建用户"参照某人权限"的验收判据——生效值全集差集为零才算复刻成功
+
+【背景】OA 单要求新建 S 账号, 批示口径"参照某在职员工 2026 年 11 月变更后的权限(销售岗+外贸部后勤岗)"。参照人实测 5 个角色 + 1 个 2023 年废弃的手工参数档案(含建单权限)。按此前口径新用户不挂废弃档案, 但"参照"到底要不要照抄这个档案存在判断空间。
+
+【做法】先按岗位角色建号(角色全部复用已有, 零新建), 再用 SUSR_USER_AUTH_FOR_OBJ_GET 取新用户与参照人的 S_TCODE 生效值全集做**双向差集**: 结果 75 条 vs 75 条, 两个方向的差集都为空 → 证明被排除的废弃档案对事务码权限贡献为零, 排除无损失。这比逐个档案争论"要不要挂"可靠得多。
+
+【教训】1)老系统(ECC)里档案(PROFILE)的授权值表 USR12 是 LCHR 长字段, RFC_READ_TABLE 直接 rc=5 读不出来; 想判断"某个档案到底给什么", 与其硬读档案, 不如用生效值全集做差集反推。2)角色→档案映射表 AGR_1016 用多个角色名拼 OR 条件时, 极易超过 RFC_READ_TABLE OPTIONS 单行 72 字符上限而报语法解析错误, 必须逐角色短条件循环查。3)USR05 参数(SET/GET)按同岗位参照人镜像; 本例参照人四参齐全且与另一岗位一致。4)密码状态 PWDSTATE=1 表示管理员设的初始密码(首登强制改), 属正常新建态; 用 RFC 直连验证时会报 "No RFC authorization for function module RFCPING"——这是**登录已成功、只缺 S_RFC 授权**, 不是密码错误, 别误判。
+
+【复用建议】凡"参照某某人的权限"类需求, 验收标准建议固定为: 角色清单逐项相等 + 生效值对象全集双向差集为零(或差集逐项解释)。执行前先快照参照人 USR02/AGR_USERS/UST04/USR05/生效值, 执行后同口径对比, 一次性给出结论。

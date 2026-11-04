@@ -132,3 +132,23 @@
 【教训】1)老系统(ECC)里档案(PROFILE)的授权值表 USR12 是 LCHR 长字段, RFC_READ_TABLE 直接 rc=5 读不出来; 想判断"某个档案到底给什么", 与其硬读档案, 不如用生效值全集做差集反推。2)角色→档案映射表 AGR_1016 用多个角色名拼 OR 条件时, 极易超过 RFC_READ_TABLE OPTIONS 单行 72 字符上限而报语法解析错误, 必须逐角色短条件循环查。3)USR05 参数(SET/GET)按同岗位参照人镜像; 本例参照人四参齐全且与另一岗位一致。4)密码状态 PWDSTATE=1 表示管理员设的初始密码(首登强制改), 属正常新建态; 用 RFC 直连验证时会报 "No RFC authorization for function module RFCPING"——这是**登录已成功、只缺 S_RFC 授权**, 不是密码错误, 别误判。
 
 【复用建议】凡"参照某某人的权限"类需求, 验收标准建议固定为: 角色清单逐项相等 + 生效值对象全集双向差集为零(或差集逐项解释)。执行前先快照参照人 USR02/AGR_USERS/UST04/USR05/生效值, 执行后同口径对比, 一次性给出结论。
+
+## 2026-11-04: 拓斯达 SAP BASIS 10月巡检——SAP GUI 网格"读不出数"的根因是列元数据懒加载
+
+【背景】拓斯达(TSP, S/4HANA 1709 + HANA 2.00.012)月度巡检，要在无 MCP 工具链可用的情况下用 cscript + SAP GUI Scripting(COM) 读 SM12/SM13/ST03N 网格。SM51 等简单列表能读，但 SM12 锁定条目、SM13 更新错误、ST03N 用户页签三处 `grid.ColumnCount` 有值、`ColumnOrder(0)` 却为空或报错，`GetCellValue` 一律取不到，一度以为路径找错。
+
+【做法】逐个网格试到 `g.FirstVisibleRow = 0`(触发一次滚动)之后，`ColumnOrder` 立刻有值、`GetCellValue` 正常。进一步发现 ALV 每页只物化约 113 行，要读全量就按页步进 `g.FirstVisibleRow = p`(p += VisibleRowCount)，用行号字典去重累加。SM13 十月 304 条、SM12 31 条由此读全并可与界面表头"N 已找到更新记录"对拍。
+
+【教训】1) SAP ALV(GuiGridView)的列定义是**懒加载**的，未滚动时列集合为空——这不是路径错误，先滚一次再读。2) 全量读取必须分页 + 按行号去重，不能只读当前页就下结论(曾据此把 304 条误报为 110 条)。3) SM13 列表页没有日期过滤字段，必须在选择屏用 `txtFROM_DATE/txtTO_DATE` 再执行；想改区间要重新进事务。4) 截图改用 `PrintWindow(hwnd, hdc, 2)` 直取窗口位图，不受上层窗口遮挡，比 CopyFromScreen 稳定(Git Bash 调用需 MSYS_NO_PATHCONV=1 + 绝对路径 + hwnd 首参)。5) 报表式页面(DB50 概览)鼠标滚轮无效，先最大化(ShowWindow 3)再 `SendKeys {PGDN}` 即可滚到底部主机内存/磁盘块。6) ST03N 分析视图树 `SelectedNode` 返回空，直接按根键 "C" 展开，C.1=事务、C.2=EarlyWatch、C.3=时间。7) 模板上月版里的图片槽位与图注可能本身就是错位的(09 版 ST03N 三张图填反)，替换前要按图注语义逐槽核对，不要盲信上月的映射。
+
+【复用建议】SAP GUI 读网格的标准姿势：定位到 shell → 设 FirstVisibleRow=0 → 读 ColumnOrder/ColumnCount → 分页遍历 GetCellValue → 与界面上的"N 条"计数对拍。凡"界面有数、脚本无数"，先怀疑懒加载，不要先怀疑路径。
+
+## 2026-11-04: 拓斯达巡检敏感信息纪律——临时脚本口令零落盘
+
+【背景】巡检过程中为绕过 MCP 会话问题，写了几个直接调 `SAP GUI Engine.OpenConnection` / 填登录屏的探针 vbs，里面带了明文口令。
+
+【做法】任务收尾时全目录 grep 口令字符串，定位并删除 4 个含明文口令的探针(`fill_login.vbs`/`open2.vbs`/`open3.vbs`/`t_open.vbs`)，再把整棵工作目录扫一遍确认零残留。
+
+【教训】客户系统的口令只能走内存参数(MCP login_to_sap)，任何落盘的脚本、日志、命令行历史都可能被留存；临时探针用完必须立即删，不能留在 tmp 里"下次还用"。
+
+【复用建议】巡检项目的收尾清单加一条：`grep -ril "<口令>" 工作目录` 必须为空。

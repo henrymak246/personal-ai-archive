@@ -114,3 +114,11 @@
 【教训-报告】7)月度报告正确工作流=以上月用户定稿版为模板(博晖同款), 截图全继承, 只换月数据+图表+清禁用词(未采集/无法截图/无数据/直连通道); 换字时 paragraph 里含 drawing run 的段落 set_para 必须跳过图片 run, 否则 run.text 赋值会删掉图片; 模板图片替换用 replace_image 先删 drawing run 再 add_picture。8)验证口径: docx 全文扫禁用词+旧月数字残留(628/208/9月/2026.9), PDF 经 WPS COM 导出后 fitz 逐页数图+OCR 抽查页。
 
 【复用建议】巡检图对位三查: 截图内容 OCR 实读(标题栏/表头)→ 题注与内容逐槽对拍 → 生成器 put_image 的段落索引与模板题注段落逐行核对。月度报告绝不从旧模板重建, 一律从上月定稿继承。
+
+## 2026-11-04: Claude Code /model 切默认模型"不生效"定案——.bashrc 旧直连 export 穿透
+
+【背景】用户在 Claude Code 里 `/model` 选了 GLM-5.3-Flash, 提示已存为新会话默认, 但同时警告"ANTHROPIC_MODEL is set to deepseek-v4-pro — new sessions use that while it is set"。排查: settings.json `model` 字段已是 GLM ✓, 注册表 HKCU/HKLM 均无 ANTHROPIC_MODEL, 最终在 `~/.bashrc` 第 4 行抓到 magpie 接管之前的旧 DeepSeek 直连残留 `export ANTHROPIC_MODEL='deepseek-v4-pro[1m]'`(连同旧 BASE_URL/旧 key/DEFAULT_*/SUBAGENT_MODEL 整块)。
+
+【教训】1)优先级实证: settings.json env 块**有的键**会覆盖 shell export(BASE_URL/AUTH_TOKEN/ANTHROPIC_DEFAULT_*_MODEL 实测被覆盖成网关值), **没有的键**会从 shell 穿透(ANTHROPIC_MODEL/CLAUDE_CODE_SUBAGENT_MODEL)——"settings.json 看起来配好了"≠生效, 必须对每个关键键逐一核对来源。2)环境变量优先级高于 settings.json 的 model 字段, 这是 Claude Code 明文行为(/model 输出原话)。3)排障顺序: 先查 settings.json → 再查注册表用户/系统环境 → 最后 shell profile(bashrc/bash_profile), 本例前两层都干净差点漏掉第三层。4)已运行会话的进程环境在启动时注入, 改完配置当会话 bash 仍见旧值, 验证要用 `env -i bash -c 'source ~/.bashrc; echo $VAR'` 模拟新会话。5)顺带根除隐患: 旧块里还有已过期/限额的 DeepSeek 直连 key + BASE_URL, 一旦 settings.json env 缺键就会静默回退直连(即本机 402 复发的潜在路径之一)。
+
+【复用建议】任何"配置改了但不生效"类问题: 列全该配置的所有可能来源(项目 settings → 用户 settings → env 块 → shell profile → 注册表 → 启动器脚本), 逐一 grep 变量名, 找出未被上层覆盖的穿透键; 修复后用干净环境(env -i)重 source 验证。

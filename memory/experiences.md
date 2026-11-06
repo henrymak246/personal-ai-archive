@@ -172,3 +172,13 @@
 【教训】1) **批量导入 Note(SNOTE download/import)只是把 Note 数据进系统，实施永远逐个人工点**——"导入了多少"和"实施了多少"必须分口径报，本例 98 个导入只有 18 个闭环。2) 批量下载时段常伴随反复重试：同一 Note 2-4 条 #825、并夹 #127(对象锁)/#300(锁问题未确认)，是同一请求(DS4K901467)里对象锁未释放的典型症状，别当成多次独立导入。3) 未闭环 U 档剧本高度同构：实施(281)→返工回滚(276/279)→#300 锁→重签下载→重做(286)→#016 数据容器不一致，一晚会在多个 Note 上重复上演，批量核查时按剧本聚类比逐个数效率高。4) CWBNTHEAD 总数（万级）是历史累计下载量，别拿它回答"现在有多少 Note 要管"——有效口径是 CWBNTCOMP 的 167 行（当前版本状态表）。
 
 【复用建议】被问"批量导入的 N 个 Note 怎么样了"时，固定三段式回答：①去重后的真实导入数与时段分布；②按 CWBNTCOMP 状态分档计数（E/U/N/-/INC 五档）；③未闭环的逐个给剧本摘要（281→276→300→286→016 链条），并提示"导入≠实施"的口径差。
+
+## 2026-11-06: SNOTE 死锁 Note 的根因定位法——顺着激活错误的缺失类型找前置 Note + SPROXY 代理生成是隐藏关卡
+
+【背景】DS4 三个 DRC 族 Note(3719493/3765355/3717318)卡在 U(未闭环)，实施/取消实施都弹"非活动对象激活"并失败。要定位为什么激活不过、还缺哪个前置 Note。
+
+【做法】1) 激活错误对话框逐条记下缺失的 DDIC 类型名（本例 GCO_PARTICIPANT_CHECK_REQUEST / GCO_EXT_OPERATION / GCO_DRC_TRANSITION_HISTORY）。2) TADIR 按 OBJ_NAME 精确查三个类型是否存在+属什么对象类型——发现 GCO_EXT_OPERATION 已被前置 Note 3755269 建成 DTEL。3) 用 ADT `getObjectSource(url,{version:'inactive'})` 拉报错类/接口的非活动源码，grep 类型名得到精确引用行（比激活错误列表可靠，错误列表会随进度缩短）。4) 查候选前置 Note(3755269 官方标题="Prerequisites for SAP Note 3717318")的 CWBNTCI 看自带包，对包做 TADIR 全量列出，发现它交付 19 个 SPRX 代理对象（含 TABLGCO_PARTICIPANT_CHECK_REQUEST）。5) 强制激活(对话框"仍然激活"按钮)把 3755269 实施走完，引用错误 4→3，实证它确实补了一个类型。6) 差最后一个类型时查 SPROXHDR——**零行**=代理元数据没生成。
+
+【教训】1) **SPRX(代理)对象在 TADIR 有名≠类型已生成**：代理的 ABAP 类型由 SPROXY 生成器运行时建，TADIR 只是登记；判断代理类型是否存在要查 SPROXHDR(OBJ_NAME 无前缀) 或 DD02L/DD04L，不能只看 TADIR。2) SPROXHDR 与 TADIR 命名差前缀：TADIR 存 `TABLGCO_PARTICIPANT_CHECK_REQUEST`，SPROXHDR 存 OBJECT='TABL' + OBJ_NAME='GCO_PARTICIPANT_CHECK_REQUEST'，两边 LIKE 互查要用裸名，否则误判"对象不存在"。3) 查"类型是否存在"要 DD02L(表/结构) 和 DD04L(数据元素) 分开查，DTEL 在 DD02L 永远查不到——GCO_EXT_OPERATION 是 DTEL，只看 DD02L 会以为还没建。4) SPRX 对象**不进** ADT `inactiveObjects()` 列表：列表只剩 3 项但代理类型缺失，说明缺的是"生成"不是"激活"，两个动作别混。5) SNOTE 死锁的通用心法：激活错误里缺什么类型 → 谁交付这个类型(TADIR/SPROXHDR/DD02L) → 交付它的 Note 实施没有 → 按 SAP 前置链逐层补；补不动就回滚成干净 N 态(本例 3765355 #276 取消实施后 PRSTATUS=N)，别让系统留在"带错激活态"。6) ADT SQL 解析器裸 `WHERE col='val'` 常报 "A Boolean expression was expected"，一律写 `WHERE col IN ('val')`。
+
+【复用建议】遇到"Note 实施/取消都弹激活错误"的硬卡：先 `inactive source` 拉报错对象源码 grep 缺失类型 → TADIR+DD02L/DD04L+SPROXHDR 三处核类型存在性 → 反查交付 Note 并实施 → 仍缺则 SPROXY 手动生成代理（SPROXY 首开会弹"企业服务浏览器"提示窗，按钮 wnd1/tbar[0]/btn[25] 永不显示 / btn[0] 继续但加载久，VBS 会挂超时，建议分步脚本+截图确认）。处理前先确认本机网络通目标系统——本次中途网络切换(10.197.18.x→10.10.1.1)全链中断，断点存 `tmp/ds4/RESUME_1106.md`。

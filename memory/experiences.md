@@ -152,3 +152,13 @@
 【教训】客户系统的口令只能走内存参数(MCP login_to_sap)，任何落盘的脚本、日志、命令行历史都可能被留存；临时探针用完必须立即删，不能留在 tmp 里"下次还用"。
 
 【复用建议】巡检项目的收尾清单加一条：`grep -ril "<口令>" 工作目录` 必须为空。
+
+## 2026-11-06: SAP Note(SNOTE) 实施状态核查——CWBNTCOMP 看结果 + CWBNTMSG 还原时间线
+
+【背景】客户 DS4(S/4HANA 2025 FPS1)上一族 DRC 相关 SAP Note 由顾问白天分批实施，留的口头状态是"有的完成、有的返工未收尾"。需要不看 SNOTE 界面、纯 ADT 只读 SQL 就核定每个 Note 的真实状态，并发现笔记之后的新动作。
+
+【做法】两张表足够：`CWBNTCOMP`(NUMM/VERSNO/PRSTATUS/INCOMPLETE) 一眼看 6 个 Note 的处理状态(E=闭环/U=未闭环，INCOMPLETE 空=无未完成项)；`CWBNTMSG`(NUMM/MSGNO/MSGV1-4/TSTAMP/UNAME) 按时间戳字符串排序还原全天操作时间线。关键 MSGNO(消息类 SCWN)：825=重签下载、281=状态转 finished、285=写入请求、286=更正指令完全实施、276=指令完全回滚、122=用户确认手工活动、127=对象被锁在请求、015=实施状态已被重置、016=数据容器不一致。
+
+【教训】1) CWBNTMSG 的 TSTAMP 是 `YYYYMMDDHHMMSS` **字符串**，abap-adt-api 库不会转 JS Date，直接字符串排序/比较即可；取回后 `.trim()` 去尾空格。2) T100 里消息号列名是 **MSGNR** 不是 MSGNO。3) 顾问口头"实施完成"≠ SNOTE 状态干净——本例两个 Note 指令层 286 全实施，却双双落 016 "Inconsistent data container"，SNOTE 里仍会显示不一致，需 reset/reprocess 或删 Note 重下。4) 核查时间点很重要：笔记只记到 10:47，系统日志里 14/18/20 点还有三段（下午被对象锁弹回十次、傍晚重签下载、晚上收尾），纯按笔记结论会漏掉"已重置+重做+落不一致"的完整演变。5) CWBNTCI 的 CIPAKID 区分对象来源('1'=Note 自带包，数字串=系统 SP 包)，返工/回滚的元素若属 SP 包交付对象，实施=改标准对象，要单独提示客户。6) 同一请求里被锁的对象(127)会导致反复实施失败，先查锁再重试。
+
+【复用建议】凡"SAP Note 到底实施完没有"的问题，固定流程：CWBNTCOMP 取 PRSTATUS/INCOMPLETE 全景 → CWBNTMSG 拉目标 Note 全量日志按 TSTAMP 排序 → 用 MSGNO 词典读时间线(281 闭环算完成；286 后有 015/016 要警惕) → 结论里区分"指令层已实施"与"状态层不一致"两个口径。

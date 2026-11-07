@@ -200,3 +200,11 @@
 【教训】1) 本机 PowerShell 访问 SAP GUI 自动化 COM 不通：Marshal.GetActiveObject("SAPGUI") 报 CO_E_CLASSSTRING(0x800401F3)，BindToMoniker 报 TYPE_E_CANTLOADLIBRARY，New-Object 无对应 ProgID；而 cscript/wscript 的 GetObject("SAPGUI").GetScriptingEngine 完全正常——SAP GUI 自动化驱动一律用 VBScript，别在 PowerShell 上耗。2) ADODB.Stream Charset="utf-8" 写文件**带 BOM**，自家 ReadText 回读也不剥 BOM → 状态串匹配恒失败、脚本重复开窗口（一夜能开出 N 个）；状态类纯 ASCII 文件用 FSO 读写，带中文的（如 SAP Logon 条目名）才用 ADODB UTF-8 通道。3) Start-Process -WindowStyle Hidden 起 cscript 出现"看似启动实则秒退且无日志"，换 wscript.exe 直接跑（GUI 子系统、天然无窗）稳定。4) SAP GUI COM 调用会整体卡死（疑似枚举坏连接 For Each 永挂，进程还在但不吐日志）——看门狗不能只看进程在不在，要看日志文件新鲜度（>3 分钟未更新即杀）。5) 保活脚本**绝不认领用户正在工作的窗口**：认领谓词要含"停在轻松访问屏"，否则脚本会对用户 SNOTE 会话里的信息弹框按回车（本次实测误按两次，幸在用户干活前切走）。
 
 【复用建议】任何"给 SAP 系统开常驻保活窗"需求照抄这套四件套：VBS 主循环（认领→安全屏三条件→无害回车→重登→重开）+ PS1 guard（进程缺失或日志>3 分钟未更新则杀起重拉）+ schtasks 每 5 分钟 + 一键 stop 脚本。无害按键三条件缺一不可；多窗口并存时认领谓词必须能区分保活窗与用户窗（程序名+用户+客户端+屏幕状态）。
+
+## 2026-11-08 保活认领二次事故：conn id 复用 + 多 agent 共用机，领养逻辑必须彻底删除
+
+【背景】海普瑞 DS4 保活窗上线当夜又出事故：凌晨 DS4 连接全断，同机另一个 AI 会话（administrator-45）用 sapshcut 重连 GUI，新窗口**复用了保活的 conn id**（僵尸连接占位致索引重排）。保活看门狗自动拉起的脚本按旧 state 的 conn id 认领了新窗口：对它的登录屏尝试自动重登（失败，err 619，未注入内容）、对方登录后又在人家轻松访问屏按过一次回车。恰在对方要跑 SNOTE 批量下载前被及时发现。
+
+【教训】1) **conn id（con[N]）在连接死亡/重建后会复用**，"state 记 id→启动认领"在连接动荡期不安全——id 相同≠同一个窗。2) 上一版"领养谓词=客户端+用户+程序名=轻松访问屏"在多 agent 共用机上**必然误伤**：同事的会话和你的保活窗在这些维度上完全同构，无法区分。3) GUI 自动化脚本之间要按"窗口所有权"协作：不是自己的窗，任何按键/重登都不能做；跨会话抢窗靠通讯协议（SendMessage 知会）而非技术锁。4) 自动化安全哲学：默认动作集只能影响"本次运行自己创建且能验明正身"的对象，验明正身=创建时留下的独特标记。
+
+【复用建议】常驻自动化脚本认领窗口的正确姿势：创建时留独特标记（本例：OpenConnectionByConnectionString 开的窗 Description 自带连接串 /H/IP/S/端口，与 SAP Logon 条目名开窗天然区分），每次动作前校验"state id + 标记"双条件，缺一即视为陌生对象→只新建、绝不领养、绝不动键。发现误伤先止损（杀进程+禁用看门狗）再坦白告知受影响方核对现场，最后才修代码。多 agent 共用一台 Windows 做同系统 GUI 自动化时，开工前互相 SendMessage 报点位，全程只动自己验明正身的窗。

@@ -218,3 +218,19 @@
 【教训】1) **目录式 restore 要求备份文件名必须是 DB2 规范名** `<DB>.0.<实例>.NODE0000.CATN0000.<时间戳>.001`——curl 随手命名 full.bkp 会报 SQL2542N（db2ckbkp 输出末尾会提示正确文件名）。2) **db2ckbkp 扫 92G 压缩备件在 32G 内存机会被 OOM Kill**：看头信息（前几十行）够用，别等扫完；e2fsck 大文件系统同理。3) DB2 9.7 在线备份 restore 后不 rollforward 是 rollforward-pending 状态，前滚用备份内嵌日志(logtarget 解压出来的)秒级完成；增量链用 `restore db PRD incremental automatic from ... taken at <增量时间戳>` 叠。4) 老系统异机还原完全不依赖老镜像能开机——软件树 tar+同大版本实例+COS 备份三件套即可；9.7 备份只能还到 9.7 同大版本(可高 FP)。
 
 【复用建议】DR 演练模板：公有 RHEL 同源镜像 → tar 软件树 → db2icrt → COS 拉备(预签名+断点续传) → 规范文件名 → restore+logtarget → rollforward → connect+数表验证。RTO 实测口径：下载 40min+还原 6h(92G→362G)+前滚秒级≈6.5-7h。验收三件套=SAP 客户端表(T000 看 client 800)+大表 count(BKPF)+syscat 表数。
+
+## 2026-11-08 SAP FM「参数不存在」排障：先查自己的参数节，别怀疑 WP 陈旧加载
+
+【背景】海普瑞 DS4 批量实施 SAP Note，自建 report 调 `SCWN_DARK_API_IMPL_MULTI_NOTES`，SA38 前台必报「形式参数 IT_NOTE_HEADERS 不存在」，但 SE37 测试台直调同一 FM 完全正常，FUPARAREF 定义层也确实有该参数。最初定案为「对话框 WP 持有旧版函数组加载」（SNOTE 刚被升级过），改走后台作业绕开——这个定案是错的，浪费半天。
+
+【教训】1) **ABAP CALL FUNCTION 的生成期检查只验证参数名存在，运行期才严格校验参数节**：把 TABLES 参数写进 EXPORTING 块，编译过、运行炸，报的正是「形式参数不存在」。2) **「定义层有、运行报没有」第一嫌疑是自己代码的参数归位**，第二嫌疑才是 WP/加载缓存陈旧——先后次序不能反。3) FM 本身有没有问题，SE37 单测一票定案：SE37 过、自建代码挂 = 自建代码的锅。4) TABLES 实参必须显式声明为精确 DDIC 表类型（`DATA: lt_head TYPE cwbnt_t_head.`），SELECT * 的 @DATA 推断类型与 DDIC 表类型不兼容会触发 CX_SY_DYN_CALL_ILLEGAL_TYPE。5) NUMC 值直接传 CHAR 参数（TR_CHECK_OBJECT_LOCK 的 WI_OBJNAME）会 CALL_FUNCTION_CONFLICT_TYPE，要经 TROBJ_NAME 这类兼容类型显式转换。
+
+【复用建议】遇到 ABAP 动态调用报参数不存在/类型冲突：①核对 FUPARAREF 参数归位（EXPORTING/IMPORTING/CHANGING/TABLES）与实参声明类型；②SE37 单测隔离 FM 本体；③WP 陈旧加载论只有在前两项全绿、且函数组刚被升级/激活时才考虑（后台作业=新 WP 可绕开验证）。同类隐形坑：FM 的 TABLES 参数在 7.52+ 可改 CHANGING 传值，跨版本调用双方声明必须一致。
+
+## 2026-11-08 切分清单写文件的边界逗号坑：paste/split 产物必须回读计数验证
+
+【背景】75 个 SAP Note 清单按 xlsx 行序切 3 份（25/25/25）写 chunk 文件供 SA38 参数使用，事后发现每份恰好漏一个逗号——相邻 chunk 的最后一个与第一个 note 融合成 14 位数字串（如 36984353695841），下游按逗号 split 后该 token 匹配不到任何 note，**两个 note 被静默漏实施**，且所有文件"看起来"长度正常（199/200 字节）。
+
+【教训】1) 程序化生成清单文件后**必须回读做计数+边界校验**（条目数、首尾元素、相邻文件接缝处值），文件大小正常不代表内容对。2) 融合错位的值不一定报错——NUMC 字段直接静默不匹配，这类"沉默丢失"只能靠对账发现。3) 本次还叠加了排除条件遗漏：重建清单时少排除一个撤稿 note（3778929），靠与旧版清单 diff 才发现。
+
+【复用建议】任何"切分→写文件→下游按分隔符消费"的链路，收口动作=回读 diff 源清单（sort 后 comm -3）+逐 chunk 报数；涉及排除条件时先列排除清单再生成，最后与上一代产物 diff 确认无意外进出。

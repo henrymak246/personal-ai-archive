@@ -234,3 +234,21 @@
 【教训】1) 程序化生成清单文件后**必须回读做计数+边界校验**（条目数、首尾元素、相邻文件接缝处值），文件大小正常不代表内容对。2) 融合错位的值不一定报错——NUMC 字段直接静默不匹配，这类"沉默丢失"只能靠对账发现。3) 本次还叠加了排除条件遗漏：重建清单时少排除一个撤稿 note（3778929），靠与旧版清单 diff 才发现。
 
 【复用建议】任何"切分→写文件→下游按分隔符消费"的链路，收口动作=回读 diff 源清单（sort 后 comm -3）+逐 chunk 报数；涉及排除条件时先列排除清单再生成，最后与上一代产物 diff 确认无意外进出。
+
+## 2026-11-08 DB2 9.7 异机复活 SAP 应用层五大坑（嘉丰演练机 43.138.151.237）
+【背景】客户 SAP ECC+DB2 9.7 生产（嘉丰）做灾难恢复演练：DB2 库还原成功后，把客户快照里的 SAP 应用层（kernel 721/SLES11 时代）搬到 CentOS 6.10 演练机上启动到 GUI 可登录。卡点是连环五坑，每坑都"看起来该这么修"实则不是。
+
+【五个坑与正解】
+1. 内核连库报 SQL30082N reason 24（口令失效）：内核口令存在加密文件 dscdb6.conf 里，异机必然失配。**别动 DB2 认证方式**（改 AUTHENTICATION=CLIENT 会退 reason 17 更糟，且它是 DBM 级参数不是 DB 级）。正解=OS 层 `passwd sapprd` + 用内核自带 `dscdb6up <user> <pwd>` 重铸加密库（它报 "not root ABORTING" 只是没顺改 OS 口令，文件已写入）。
+2. R3trans 连上库仍被拒：新 db2icrt 的实例缺 `DB2_WORKLOAD=SAP`（db2set 设置，kernel 的 checkDB2Workload 强制检查）。
+3. dispatcher 启动即 DP_FATAL：rdisp/myname=`主机名_SID_实例号` 超 20 字符。正解=实例 profile 覆盖 `rdisp/myname` + `rdisp/enqname=<ASCS实例名>`，不用改真主机名。
+4. ★DB2 9.7 db2start 报 SQL6031N reason 10（主机名"不可解析"）：strace 实锤它**只查 AAAA（IPv6）记录**——主机名必须有 IPv6 解析才放行，A 记录不算数。
+5. ★SAP disp+work 又严禁本机主机名解析到回环（::1 也算，DP_FATAL）。且 db2nodes.cfg 节点名必须=主机名（否则 SQL6048N）。三线唯一解：**给 lo 配个非回环 ULA IPv6**（`ip -6 addr add fd00::14/128 dev lo`）+ hosts 双栈（v4 真实 IP 排前给 SAP，fd00::14 给 DB2 校验）。
+
+【教训】
+- 老软件（DB2 9.7/kernel 721）的校验逻辑与现代直觉相反，**strace 看真实系统调用（sendto 的 DNS 包 qtype）是定位"神秘解析拒绝"的终极手段**，比猜配置文件快十倍。
+- "解析成功"分 A/AAAA 两套记录，排查解析类故障先问"它查的是哪一族"。
+- csh 用户（prdadm）的脚本里写 `2>&1` 会 Ambiguous redirect 秒死；plink 远程 `&` 后台必被掐，一律 `setsid ... </dev/null & disown`。
+- 折腾认证/口令前，先想"原设计怎么工作的"——SAP 连 DB2 本来就有官方口令重铸工具 dscdb6up，自创方案（改认证级别）都是弯路。
+
+【复用建议】任何"老 SAP+DB2 异机复活/拷贝"项目，清单化：①dscdb6up 重铸 ②DB2_WORKLOAD ③rdisp/myname 长度 ④db2nodes.cfg 与主机名一致性 ⑤双栈 hosts。五步全验过再 startsap。

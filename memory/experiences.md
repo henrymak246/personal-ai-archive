@@ -208,3 +208,13 @@
 【教训】1) **conn id（con[N]）在连接死亡/重建后会复用**，"state 记 id→启动认领"在连接动荡期不安全——id 相同≠同一个窗。2) 上一版"领养谓词=客户端+用户+程序名=轻松访问屏"在多 agent 共用机上**必然误伤**：同事的会话和你的保活窗在这些维度上完全同构，无法区分。3) GUI 自动化脚本之间要按"窗口所有权"协作：不是自己的窗，任何按键/重登都不能做；跨会话抢窗靠通讯协议（SendMessage 知会）而非技术锁。4) 自动化安全哲学：默认动作集只能影响"本次运行自己创建且能验明正身"的对象，验明正身=创建时留下的独特标记。
 
 【复用建议】常驻自动化脚本认领窗口的正确姿势：创建时留独特标记（本例：OpenConnectionByConnectionString 开的窗 Description 自带连接串 /H/IP/S/端口，与 SAP Logon 条目名开窗天然区分），每次动作前校验"state id + 标记"双条件，缺一即视为陌生对象→只新建、绝不领养、绝不动键。发现误伤先止损（杀进程+禁用看门狗）再坦白告知受影响方核对现场，最后才修代码。多 agent 共用一台 Windows 做同系统 GUI 自动化时，开工前互相 SendMessage 报点位，全程只动自己验明正身的窗。
+
+## 2026-11-08 DB2 9.7 异机还原演练全通：腾讯云 CentOS6.10 路线 + 三坑定案
+
+【背景】嘉丰(东莞) SAP ECC+DB2 9.7 老架构，生产 sapprd 每日 96G 在线全备传腾讯云 COS（达贡账号）。为验证"老 SLES11 镜像在腾讯云开不了机"之外的 DR 路线：CentOS 6.10 公有镜像(RHEL6 系=DB2 9.7 认证平台) → tar 拷贝源机 DB2 软件树 → db2icrt 建实例 → COS 拉全备+增量 → restore+rollforward → 验证。演练机 M6.LARGE32(32G)+600G 数据盘+600G 客户快照盘(只读)。
+
+【做法】1) 快照盘只读挂/mnt/src 拷 /db2/db2prd/db2_software（同路径 3-4G），yum vault 补 libaio 等 32 位依赖。2) db2icrt -u db2fenc1 -p 50000 db2prd（DBI1768W 只警告 .profile 没写进，无视），db2start OK。3) COS 预签名 URL curl 下载全备 92.3G(40min)+增量 10G。4) db2ckbkp -h 验头（在线备份含日志、压缩、UTF-8、时间戳 20261030230019）。5) restore db PRD from /db2/backup taken at ... on /db2/PRD logtarget /db2/PRD/log_dir → 6h 还原 362G → rollforward to end of logs and complete → connect 验证。
+
+【教训】1) **目录式 restore 要求备份文件名必须是 DB2 规范名** `<DB>.0.<实例>.NODE0000.CATN0000.<时间戳>.001`——curl 随手命名 full.bkp 会报 SQL2542N（db2ckbkp 输出末尾会提示正确文件名）。2) **db2ckbkp 扫 92G 压缩备件在 32G 内存机会被 OOM Kill**：看头信息（前几十行）够用，别等扫完；e2fsck 大文件系统同理。3) DB2 9.7 在线备份 restore 后不 rollforward 是 rollforward-pending 状态，前滚用备份内嵌日志(logtarget 解压出来的)秒级完成；增量链用 `restore db PRD incremental automatic from ... taken at <增量时间戳>` 叠。4) 老系统异机还原完全不依赖老镜像能开机——软件树 tar+同大版本实例+COS 备份三件套即可；9.7 备份只能还到 9.7 同大版本(可高 FP)。
+
+【复用建议】DR 演练模板：公有 RHEL 同源镜像 → tar 软件树 → db2icrt → COS 拉备(预签名+断点续传) → 规范文件名 → restore+logtarget → rollforward → connect+数表验证。RTO 实测口径：下载 40min+还原 6h(92G→362G)+前滚秒级≈6.5-7h。验收三件套=SAP 客户端表(T000 看 client 800)+大表 count(BKPF)+syscat 表数。

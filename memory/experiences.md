@@ -252,3 +252,11 @@
 - 折腾认证/口令前，先想"原设计怎么工作的"——SAP 连 DB2 本来就有官方口令重铸工具 dscdb6up，自创方案（改认证级别）都是弯路。
 
 【复用建议】任何"老 SAP+DB2 异机复活/拷贝"项目，清单化：①dscdb6up 重铸 ②DB2_WORKLOAD ③rdisp/myname 长度 ④db2nodes.cfg 与主机名一致性 ⑤双栈 hosts。五步全验过再 startsap。
+
+## 2026-11-08 S/4 BSEG 被加自定义字段引发 NAMETAB 不一致灾难的定案与收尾方法论
+
+【背景】客户 S/4HANA 生产（HANA 库，BSEG 透明表约 7.5 亿行）有人通过 CI_COBL 加了自定义字段 Z2ZSYLX 并激活，连带 mass adjust 全部 BSEG 依赖结构；随后 BSEG 运行时对象(NAMETAB)与 DDIC 不一致（声明 418 组件、递归解析不符），所有碰 BSEG 的程序全部内核 SYSTEM_ERROR dump，当天单个 IDoc 过账账号刷出 48.7 万条 dump；SE14 对 BSEG 做物理转换时生成程序读备份表 QCMBSEG 报 SQL 260 invalid column name（用新结构 SELECT 旧备份表），转换中断。三天后系统已被回退（字段从 DDIC 消失、物理表原样、无 QCM 残留、dump 清零），任务是给出"最终怎么处理"。
+
+【教训】①BSEG/CI_COBL 这类核心结构的字段变更，正确姿势=DEV 加字段→正规传输→PRD 激活后 SE14 转换；在 HANA 上给大表加**可空列是元数据级操作**（秒级），根本不该演化出 QCM 全量转换——出现 QCMBSEG 就说明流程走歪了；②"NAMETAB 组件数声明值 vs 递归解析值不一致"dump 的成因=DDIC 激活后运行时对象没再生成/半激活态，任何程序一读该结构就炸，且会被高频业务账号（过账/IDoc）放大成 dump 洪水；③取证可以全程只读：SNAP 表可直接 HANA SQL 查（FLIST 各段拼 blob 解 FC/AM 长度标签得错误名+程序名），DD03L 查字段在哪些结构、TABLES/TABLE_COLUMNS 查 QCM 残留与物理列、DDXTT 查转换登记、TBTCO 查作业（列名 SDLUNAME/STRTDATE/STATUS，无 UNAME）；④dump 洪水是唯一最早信号——当天就该被"SNAP 单日暴增"发现，纳入监控比事后取证便宜得多；⑤最危险的不是当前状态而是源头未清：字段若还挂在 DEV/QAS 或某个传输里，下次导入原样复发，所以"溯源+源头删除"必须写进收尾清单。
+
+【复用建议】遇到同类"DDIC 结构不一致/转换中断"事件，收尾四步清单：①一致性验证（SE11 运行时对象比较+一致性检查、SE14 查绿、业务重跑验证）；②溯源变更（E070/E071+对象修改记录，跨系统核对源头，防止传输复发）；③清理残留（QCM 残留表、海量 SNAP 记录）；④监控兜底（SNAP 单日阈值+NAMETAB/QCM 关键字纳入周期巡检）。另：Windows 自带 WinRT OCR 会静默失效（引擎类型加载失败、新旧图全报错），本机已装 Tesseract(chi_sim+eng)，中文截图用 `tesseract <img> stdout -l chi_sim+eng --psm 6`，小字先 PIL 放大 3 倍+autocontrast。

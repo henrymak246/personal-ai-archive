@@ -370,3 +370,12 @@ ALTER SYSTEM SAVEPOINT;
 生产结构核查结论（只读 SELECT）：BSEG DD02L ACTFLAG='' + DDNTT 418/物理 418 列、RBCO 97/97，均只有 ZZHKONT；DD04L 无 ZZSYLX/ZZSYLXTX；TBATG/TCNV 空；今日 0 条 DDIC_TYPE_INCONSISTENCY，也无任何 dump 提及 BSEG/RBCO/CI_COBL。唯一残留是 CI_COBL ACTFLAG='U'（11-03 DS004 所改，字段只有 ZZHKONT，运行期与物理一致），不产生转储。
 
 【复用建议】报告"某天多少 dump"前先确认统计口径：SNAP 按段存储，行数会把 dump 数放大 100-200 倍；跨系统对比（开发机 vs 生产）时尤其容易误判"生产也在刷"。
+
+## 2026-11-10 SAP 单请求定向传输：TMS_MGR_IMPORT_TR_REQUEST 的 CMDIMPORT 空转坑 + 老系统 DDIC 缺表只能走 AIR
+
+广药 CR981 把 QAS 已测的 DEVK904317 导入 PRD client 101（不能触发 RDDIMPDP，否则会拖走队列里其余 723 条等待请求），两个坑：
+
+1. **`IV_CMD_IMPORT='X'` 是空转**：这个参数让 FM 只向 tp 发 `CMDIMPORT`（STMS 对话框做预检用），ALOG 记 op 码 `L`、SLOG 只有 START/STOP CMDIMPORT，两秒返回但数据一动不动。**真正导入必须 `IV_CMD_IMPORT = ' '`（留空）**，此时 SLOG 出现 `START imp single / MAIN IMPORT`，成功标志是 ALOG 行 `DEVK904317 PRD:101 I 0000 <yyyymmddhhmmss>`。
+2. **老系统缺 TMS 类型表，RFC 描述符构建失败**：PRD 的 DDIC 没有 `STMS_TP_IMPORTS/STMS_TR_REQUESTS/TMS_FLAG/TMSTPKEY`，外部 RFC 客户端 get_function_desc 报 DA300 "No active nametab exists"。解法=**用 AIR（RFC_ABAP_INSTALL_AND_RUN）在系统内直接 CALL FUNCTION**，绕开描述符，行宽按老编译器限制 ≤72 字符。
+
+【复用建议】传输类任务先问三件事：①要不要动队列其余条目（要=只能单请求 FM，别用 RDDIMPDP/STMS 整队导入）②FM 能不能经 RFC 调（DD02L 查 STMS_TP_IMPORTS 在不在，不在就走 AIR）③IV_CMD_IMPORT 留空没有。事后验证一律对象级（配置表/程序源码 diff），E070 TRSTATUS 在老系统恒 'R' 不可信。

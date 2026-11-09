@@ -335,3 +335,30 @@ printf '<Passwords>\n<master_password>PWD</master_password>\n</Passwords>\n' | \
 5. 传输 3.8G 用 pscp 内网 25ms 链路只有 1.7MB/s（约 35 分钟）；pscp 在 Git Bash 下本地路径必须写 `D:/...` 且 MSYS_NO_PATHCONV=1，否则 /d/... 被当相对路径报 No such file。
 
 【复用建议】HANA 装机前先查 /usr/sap、/hana 是否已有内容与主机名，避免把"新机器"和记忆里同 IP 的老机器混为一谈（本次 239.78 主机名已从 sles15sap 变为 ecs-sap-hana，10-13 那套安装痕迹全无）。
+
+## 2026-11-09 HANA 建 PRD 租户 + 加密真正关闭（广药 239.78 / HANA 2.00.089.02）★更正上一条经验第 4 点
+
+【更正】上一条写的"装完立即 ALTER SYSTEM 三项改 off + HDB stop/start 验证运行时生效"不准确：当时实际只改了 global.ini 参数（M_INIFILE_CONTENTS 显示 off），**没有执行 ALTER SYSTEM 命令**，运行时 `M_ENCRYPTION_OVERVIEW` 三项仍 `IS_ENCRYPTION_ACTIVE=TRUE`，数据一直在加密。教训：改配置文件 ≠ 关闭加密，验证必须看 M_ENCRYPTION_OVERVIEW。
+
+【建租户（SYSTEMDB 下执行）】
+```sql
+CREATE DATABASE PRD SYSTEM USER PASSWORD "Suse#2026";
+```
+- 2.00.089.02：密码必须用**双引号**标识符；单引号报 257 语法错
+- 2.00.089.03（老 239.78 同 SID）：反而必须**裸口令**（不带引号）——同大版本不同 SPS 语法相反，遇到 257 就换写法试
+- 新租户端口：indexserver 30040 / SQL **30041**（hdbsql -d PRD 自动解析端口，不用写 -n）
+
+【真正关闭加密（★每个库各自独立做：SYSTEMDB 和每个租户都要，共 N 遍）】
+```sql
+ALTER SYSTEM SET ENCRYPTION ROOT KEYS BACKUP PASSWORD "pwd";
+ALTER SYSTEM PERSISTENCE ENCRYPTION OFF;
+ALTER SYSTEM LOG ENCRYPTION OFF;
+ALTER SYSTEM BACKUP ENCRYPTION OFF;
+ALTER SYSTEM SAVEPOINT;
+```
+- 不带 ALTER SYSTEM 的 `SET ENCRYPTION ROOT KEYS BACKUP PASSWORD ...` 在 SPS09 报 257
+- 不先设根密钥备份密码，ALTER SYSTEM xxx ENCRYPTION OFF 会报 "Encryption root keys backup password doesn't exist"
+- SAVEPOINT 后约 20s 生效，**不必重启**；HDB stop/start 复验重启后仍保持
+- 验证口径：`SELECT SCOPE, IS_ENCRYPTION_ACTIVE FROM M_ENCRYPTION_OVERVIEW` 三库三项全 FALSE
+
+【复用建议】"关加密"类任务的标准动作：先查 M_ENCRYPTION_OVERVIEW 拿运行态 → 配置层改完必须用运行态复验；MDC 环境下租户是独立单元，一条 SQL 只影响当前库，要逐库执行。

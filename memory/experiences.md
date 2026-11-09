@@ -275,3 +275,17 @@
 
 【复用建议】任何"长期保活窗+同机他人作业"场景：①判相三件套（别名全探/list 对照/审计日志）；②杀实例只杀自己会话的（按父进程 PID 辨认）；③开窗后必做陌生窗清点；④身份以 system_session_id 为准且每轮重探（别名-身份映射会漂移）；⑤cron prompt 必须完全自包含（新会话零上下文也能执行）。
 
+
+## 2026-11-09 SAP SE14 转换中断的两张表实修：BSEG 补列 + RBCO 重建（太力 S4D 开发机）
+
+【背景】太力 S4D（S/4HANA，开发机 client 300）11-05 有人在 CI_COBL 加 ZZSYLX/ZZSYLXTX 后，11-08 SE14 强制转换 BSEG/RBCO 中途失败，留下 QCM8BSEG/QCM8RBCO 半成品；开发机随后每小时稳定 918 条 DDIC_TYPE_INCONSISTENCY dump（MIR4/SAPLMR1M）。BSEG 是物理表已被手工补到 420 列但 DDIC 未激活；RBCO 更严重——物理表根本不存在。
+
+【教训】
+1. **BSEG 型**：物理列数已等于目标但 nametab 滞后时，直接激活会报 DT 007「调整数据库错误」+ SQL 308（SAP 按旧 nametab 算差量，去 ADD 已存在的列）。正解=把多余的手工列 DROP 回原状，让 SAP 在激活时自己 ADD——DDL 永远归 SAP 所有，不手工建列。
+2. **RBCO 型**：HANA `RENAME TABLE` **不迁移索引/约束名**。SE14 把旧 RBCO 改名 QCMRBCO 后，主键索引 RBCO~0 仍属于 QCMRBCO；SAP 再 `CREATE TABLE RBCO` 必撞 `SQL code: 289 duplicate index name RBCO~0`，且重试多少次都一样。正解=把 SE14 造好的 QCM8RBCO 改名成 RBCO（索引名随之回归），数据从 QCMRBCO 用显式列清单搬过去，再激活让 SAP 补差量列。
+3. **取证靠 ADT 日志**：`GET /sap/bc/adt/ddic/logs/db/DB-TABL<表>` 有 SAP 原始 DDL 与失败语句；`ACTTABL<表>` 有激活级联全过程（含 SAP 自己执行的 ALTER TABLE 与「数据库操作成功/表已激活」结论）。DDNTF 在新式 HANA 上只有 TABNAME/BLOCKNR/FIELDSLG/FIELDS 聚合列，逐字段请用 DB 系统表或 DD03L。
+4. **ADT 激活必须保持 HTTP 连接**：客户端一断，SAP 侧激活程序精确停在断连时刻（实测两次）。大级联务必后台长超时跑完（curl -m 2700 + run_in_background）。
+5. **备份纪律**：旧表一律 `RENAME TABLE ... TO <表>_BAK<日期>` 而不是 DROP（本次 QCMBSEG_BAK20261109 / QCMRBCO_BAK20261109）。
+6. ACTFLAG：'' = 激活成功；'U' = 外部检查 OK 或作为依赖表出错。验收四重奏=DD02L ACTFLAG 翻空 + DDNTT FLDCNT + 物理列数/行数/金额校验 + SNAP 转储归零。
+
+【复用建议】SE14 中断恢复六步：①查 DB-TABL 日志拿 SAP 原始 DDL ②QCM<表>（旧+数据）与 QCM8<表>（新结构）做列级差异比对（名称+类型+长度，别只比列数）③显式列清单搬数据进 QCM8 ④旧表 RENAME 备份、QCM8 RENAME 成正式名 ⑤ADT 激活让 SAP 补差量列 ⑥四重验收。改完马上删/清不需要的 QCM8 残留，避免下次 SE14 再撞名。

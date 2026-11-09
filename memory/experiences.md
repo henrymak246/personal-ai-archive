@@ -289,3 +289,25 @@
 6. ACTFLAG：'' = 激活成功；'U' = 外部检查 OK 或作为依赖表出错。验收四重奏=DD02L ACTFLAG 翻空 + DDNTT FLDCNT + 物理列数/行数/金额校验 + SNAP 转储归零。
 
 【复用建议】SE14 中断恢复六步：①查 DB-TABL 日志拿 SAP 原始 DDL ②QCM<表>（旧+数据）与 QCM8<表>（新结构）做列级差异比对（名称+类型+长度，别只比列数）③显式列清单搬数据进 QCM8 ④旧表 RENAME 备份、QCM8 RENAME 成正式名 ⑤ADT 激活让 SAP 补差量列 ⑥四重验收。改完马上删/清不需要的 QCM8 残留，避免下次 SE14 再撞名。
+
+## 2026-11-09 C 盘第八轮清理：505MB → 12GB，定位方法与可清项清单
+
+【背景】用户报"又清理一下c盘空间"，C 盘 121G 仅剩 505MB（100%）。
+
+【定位方法】
+1. `du -x -d1` 扫整个用户目录会卡死超时——C:\Users\Administrator 下有 Local Settings/Application Data 等老式 junction 自指循环。**不要用 du 递归顶层**。
+2. 正确姿势：`robocopy <目录> C:\__nul_dummy__ /L /S /XJ /BYTES /R:0 /W:0 /NFL /NDL /NJH` 取汇总行「字节:」行，比 du 快一个数量级且 /XJ 不跟 junction。解析时用 `awk '{print $2}'`，不要 sed 去非数字（多列数字会粘连）。
+3. 找大文件：同上加 `/FP /NDL /NJH /NJS /BYTES /MIN:209715200`，字段按 tab 分隔，取倒数两列（$(NF-1)=字节、$NF=路径）。
+
+【本轮大盘】C:\Users 64.08G（AppData 23.2G + xwechat_files 12G + codex-sap-monitor 4.6G + sap-monitor 3G）、Windows 21.89G（System32 8.18G、WinSxS 6.66G）、Program Files 18.6G、PF(x86) 12.1G、ProgramData 2.54G。
+
+【实清项，共约 11.5G】go-build 2.1G / MEMORY.DMP 810M / 用户 Temp 527M / npm-cache 490M / pip 209M / 两个更新器安装包 594M / WPS 更新包 290M / Sangfor fulldump 200M / WDI BootPerfDiagLogger 180M / Windows\Temp 182M；codex-sap-monitor/tmp 1.5G + dist-linux 旧版 1.4G（0.14.2~0.19.22，保留 0.19.23+）+ sap-monitor/tmp/wemonitor-analysis 659M；Windows.edb 1.4G + Edge 缓存 216M + 微信开发者工具 WeappCache/Plugin/Vendor/ForeignPkgs 556M。
+
+【坑与注意】
+1. Windows.edb 删除前必须 `sc stop WSearch`，删 Windows.edb/Windows.jfm/edb*.jtx/edbres*.jrs 后 `sc start WSearch`，服务会自动重建（重建后约 72M 属正常）。
+2. Edge 缓存只能删 User Data\Default\Cache、Code Cache、GPUCache、Service Worker、BrowserMetrics、Crashpad；WebView2 进程常驻会锁住一部分，796M 实际只降 216M。
+3. codex-sap-monitor/tmp 里 sapmon-run.log 由监控进程持续写入，删目录后 1 秒内即重建，不值得追。
+4. 微信 xwechat_files 12G（聊天记录主体）、C:\tmp\jz202610 1.8G（君正数据）、WPS addons 1.2G 经用户拍板不动；微信要清只能走微信内"存储空间管理"。
+5. nvm 只有 v22.22.0 一个版本 1.47G 在用，不能删；WPS Office 本体 1.5G 属程序非缓存。
+
+【复用建议】清理前先按"纯垃圾/项目产物/系统缓存/用户数据"四组列清单让用户勾选（破坏性清理硬规则：点名制，禁批量匹配）；A/B/C 组可直接全清，D 组（微信/业务数据/云盘缓存）必须用户自己决定。

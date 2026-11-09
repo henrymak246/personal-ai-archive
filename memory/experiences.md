@@ -362,3 +362,11 @@ ALTER SYSTEM SAVEPOINT;
 - 验证口径：`SELECT SCOPE, IS_ENCRYPTION_ACTIVE FROM M_ENCRYPTION_OVERVIEW` 三库三项全 FALSE
 
 【复用建议】"关加密"类任务的标准动作：先查 M_ENCRYPTION_OVERVIEW 拿运行态 → 配置层改完必须用运行态复验；MDC 环境下租户是独立单元，一条 SQL 只影响当前库，要逐库执行。
+
+## 2026-11-09 转储统计口径：SNAP 一个 dump 占 ~99-215 行，必须按 SEQNO='000' 计数
+
+太力生产 S4P 复核（判断 S4D 的 BSEG/RBCO 事件是否波及生产）时发现：按 `SELECT COUNT(*) FROM SNAP WHERE DATUM=...` 统计会得到 1,286（今日）/ 487,149（11-05），看似洪水；实际每个 dump 会拆成多条 SNAP 记录（SEQNO 000~N，本次单条 dump 约 99-215 段），**真实 dump 数 = `WHERE SEQNO='000'` 的行数**。按此口径：11-05 是 2,270 个 dump（FI099 在 MIGO 里刷 RAISE_EXCEPTION，即 CI_COBL 加 Z2ZSYLX 那次），11-06=10、11-07=15、11-08=0、11-09=13，属 5-15/天基线。
+
+生产结构核查结论（只读 SELECT）：BSEG DD02L ACTFLAG='' + DDNTT 418/物理 418 列、RBCO 97/97，均只有 ZZHKONT；DD04L 无 ZZSYLX/ZZSYLXTX；TBATG/TCNV 空；今日 0 条 DDIC_TYPE_INCONSISTENCY，也无任何 dump 提及 BSEG/RBCO/CI_COBL。唯一残留是 CI_COBL ACTFLAG='U'（11-03 DS004 所改，字段只有 ZZHKONT，运行期与物理一致），不产生转储。
+
+【复用建议】报告"某天多少 dump"前先确认统计口径：SNAP 按段存储，行数会把 dump 数放大 100-200 倍；跨系统对比（开发机 vs 生产）时尤其容易误判"生产也在刷"。

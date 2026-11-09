@@ -311,3 +311,27 @@
 5. nvm 只有 v22.22.0 一个版本 1.47G 在用，不能删；WPS Office 本体 1.5G 属程序非缓存。
 
 【复用建议】清理前先按"纯垃圾/项目产物/系统缓存/用户数据"四组列清单让用户勾选（破坏性清理硬规则：点名制，禁批量匹配）；A/B/C 组可直接全清，D 组（微信/业务数据/云盘缓存）必须用户自己决定。
+
+## 2026-11-09 广药 239.78 新机 HANA 2.0 SPS09 安装（ecs-sap-hana / SID=HDT）
+
+【背景】用户问"广药新服务器 hana 安装完成了嘛"，实际指 239.78（不是 10.150.67.174）。登录核实：/usr/sap、/hana/* 全是当天 13:49 新建的空目录，HANA 完全没装，只有 OS/分区/saptune 就绪。
+
+【安装配方（可复用）】
+1. 介质校验：SAPCAR 是 Linux 二进制，Windows 上无法执行；把 SAPCAR 和 SAR 一起传到服务器，在服务器上 `./SAPCAR -tvf x.sar` 验完整性（RC=0 + 文件数）。
+2. hdblcm 静默安装（HANA 2.00.089.02）：
+```
+printf '<Passwords>\n<master_password>PWD</master_password>\n</Passwords>\n' | \
+./hdblcm --action=install --batch --sid=HDT --number=00 \
+  --use_master_password --read_password_from_stdin=xml --system_usage=test \
+  --ignore=check_signature_file --lss_trust_unsigned_components
+```
+3. 验收：sapcontrol GetProcessList 全 GREEN；`select DATABASE_NAME, ACTIVE_STATUS from M_DATABASES`（无 HOST/VERSION 列）；租户连通性 `select 1 from DUMMY`。
+
+【教训】
+1. **★无签名 SAR 必须 `--lss_trust_unsigned_components`**：Local Secure Store 会因 server 组件无签名直接中止安装，只加 `--ignore=check_signature_file` 不够。首轮安装就是死在这里（日志只有 10 行）。
+2. 新版 hdblcm 不接受命令行明文密码，必须 `--read_password_from_stdin=xml`；--batch 未指定参数取默认（hostname 本机、number 00、create_initial_tenant=on）。
+3. hdbsql 一次只能执行一条语句，多条 `;` 报 257，用 `-I file.sql`。
+4. 安装默认 `[encryption] backup/persistence/log_encryption=on`；按用户既往"不加密"偏好，装完立即 ALTER SYSTEM 三项改 off + HDB stop/start 验证运行时生效（空库时最干净）。
+5. 传输 3.8G 用 pscp 内网 25ms 链路只有 1.7MB/s（约 35 分钟）；pscp 在 Git Bash 下本地路径必须写 `D:/...` 且 MSYS_NO_PATHCONV=1，否则 /d/... 被当相对路径报 No such file。
+
+【复用建议】HANA 装机前先查 /usr/sap、/hana 是否已有内容与主机名，避免把"新机器"和记忆里同 IP 的老机器混为一谈（本次 239.78 主机名已从 sles15sap 变为 ecs-sap-hana，10-13 那套安装痕迹全无）。

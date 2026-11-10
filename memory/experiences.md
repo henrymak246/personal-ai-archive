@@ -395,3 +395,22 @@ ALTER SYSTEM SAVEPOINT;
 【教训】四道门，缺一不可：①**口令库** `dscdb6.conf` 是加密的，工具 `dscdb6up` 的用户名取自环境变量 `dbs_db6_user`（<sid>adm 的 .dbenv 里定义）或 profile `dbs/db6/user`，取不到就退回默认 `sapr3` 然后报"can't find user 'sapr3'"；正确姿势=先 `chpasswd` 改 OS 口令再 `dscdb6up <user> <pwd>`（rc=27 只是"非 root 不改 OS 口令"的告警，文件其实已写成功）；`-create` 参数会写成 sapr3，别用。②**DBSL 自带的 CLI 驱动是旧版**（`$DIR_GLOBAL/db6/LINUXX86_64/db6_clidriver`），连新库直接 `DB2 software level mismatch client 09.07 / server 11.05`硬拒（Note 503122 只能解释不能绕过）——官方解法是 DB2 新版 Client DVD 的 `db6_update_client.sh -u`，把 CLI 驱动刷到 `/usr/sap/<SID>/SYS/global/`，重启生效。③**`DB2_WORKLOAD=SAP` 必须在实例注册表里**（`db2set`），重建过实例就会丢，丢了 DBSL 一律拒连。④**启动环境**：`dbms_type`/`dbs_db6_*` 在 <sid>adm 的 .cshrc→.sapenv/.dbenv 里，裸 bash 起 sapstart 会 `Invalid profile parameter dbms/type ... cannot load DB library`，每个 WP 秒退。另外 dispatcher 有一条独立硬规则：**本机 hostname 不能解析到回环地址**（Note 1054467），/etc/hosts 必须指真实 IP。官方版本线（Db2 11.5 升级指南原文）：内核 7.21 需 DBSL 补丁 **1100**、7.22→600、7.49→500、7.53→200；Basis 7.00 需 SP27（本机 SP36 达标）。
 
 【复用建议】迁应用层的顺序：先补齐 OS 用户/目录/hostname(真实 IP)/services，再解决 DB 口令库，再换 CLI 驱动，最后确认 DB2_WORKLOAD 和启动用户的登录环境；排障时看 `dev_w0`（WP 级的 DB 连接错误最直白）和 `dev_disp`（实例级状态），比翻 R3trans 日志快。**核对官方版本要求时直接下 PDF 用 pdftotext 抓表格**，Help Portal 网页是 JS 壳（curl 只拿到 1KB），PDF 一条命令就能拿到"DBSL Patch Level"那张表。
+
+## 2026-11-10 还原出来的 HANA 租户，SYSTEM 会卡在 414；绕法是让 schema 用户改自己的口令
+
+【背景】广药 239.76 的 SAP（PRD/D00）原库 10.158.65.10 失联，新库 10.150.67.13（SID HDT/00）里已有 11-07 全备还原出的 PRD 租户（453G / SAPGPC schema 111,237 表）。改指向本身不难：DEFAULT.PFL 换 `SAPDBHOST`+**加 `dbs/hdb/dbname`**、`/etc/hosts` 跟着改、重建 hdbuserstore 键、重启。真卡住的是**拿不到租户 SYSTEM 口令**。
+
+【教训】
+1. **还原后租户 SYSTEM 带 `PASSWORD_CHANGE_NEEDED=TRUE`**（从源系统继承），登录直接报 414 "user is forced to change password"，改了也没用：
+   - `ALTER DATABASE <t> SYSTEM USER PASSWORD "<pw>"`（必须停库）能换口令，但**不清这个标志**，改完照样 414；
+   - 加 `NO FORCE_FIRST_PASSWORD_CHANGE` → SPS09 语法错 257（只有 `ALTER USER` 支持，`ALTER DATABASE ... SYSTEM USER` 不支持）；
+   - 把租户 `indexserver.ini` 的 `[password policy] force_first_password_change` 改 false 再重置 → 仍 414；
+   - 换成不同口令再重置 → 仍 414；
+   - `hdbsql -p '旧,新'`（JDBC 的 old,new 约定）→ SQLDBC CLI 不认；
+   - 结论：只能重新还原该租户，或者另找一个有 USER ADMIN 的用户。
+2. **别去手改 hdbuserstore 的二进制文件**：里面 host:port 虽是明文，但每条记录有 header+payload 的 checksum，同长度替换立刻 `RSEC_SSFS_RC_FILE_CORRUPTION`，整个 key 全废（有备份才救得回来）。
+3. **能救命的一招**：老库里 schema 用户（如 SAPGPC）的口令**还加密存在 hdbuserstore 的 key 里**，不用知道明文就能连上新租户——APP 上临时加一条 `iptables -t nat -A OUTPUT -d <老库IP> --dport <老端口> -j DNAT --to-destination <新库IP>:<新端口>`，`hdbsql -U DEFAULT` 就连到新库了；然后 `ALTER USER <自己> PASSWORD '<新口令>'`（改自己的口令合法，且不留强制改密标志），再 `hdbuserstore set DEFAULT <新IP>:<新端口> <用户> '<新口令>'`，撤掉 DNAT 收工。
+4. **SAP 侧重启别急**：老 disp+work 停了要等 ~50s 才真正退干净，`sapcontrol Start` 打在 "Server shutdown" 状态上是无效的，必须等 `ps -ef | grep dw.sap< SID>` 归零再启。
+5. **HANA 端口从应用机打不通先看 firewalld**：新机默认只开 ssh/22，`No route to host` 不是网络问题是防火墙。
+
+【复用建议】接"应用改数据库指向"的活，先确认三件事：①目标库的数据从哪来（是不是还原的，还原的 SYSTEM 大概率带 414）；②目标租户里业务 schema 和表数对不对（`SYS.TABLES` 按 schema 计数）；③hdbuserstore 里有没有能复用的旧口令。三件都过了再动 profile，否则改完照样起不来。验证终点是 `R3trans -d` 返回 0000 + HANA 侧 `M_CONNECTIONS` 里能看到应用机的大量业务用户连接。

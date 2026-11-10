@@ -379,3 +379,11 @@ ALTER SYSTEM SAVEPOINT;
 2. **老系统缺 TMS 类型表，RFC 描述符构建失败**：PRD 的 DDIC 没有 `STMS_TP_IMPORTS/STMS_TR_REQUESTS/TMS_FLAG/TMSTPKEY`，外部 RFC 客户端 get_function_desc 报 DA300 "No active nametab exists"。解法=**用 AIR（RFC_ABAP_INSTALL_AND_RUN）在系统内直接 CALL FUNCTION**，绕开描述符，行宽按老编译器限制 ≤72 字符。
 
 【复用建议】传输类任务先问三件事：①要不要动队列其余条目（要=只能单请求 FM，别用 RDDIMPDP/STMS 整队导入）②FM 能不能经 RFC 调（DD02L 查 STMS_TP_IMPORTS 在不在，不在就走 AIR）③IV_CMD_IMPORT 留空没有。事后验证一律对象级（配置表/程序源码 diff），E070 TRSTATUS 在老系统恒 'R' 不可信。
+
+## 2026-11-10 Db2 9.7 跨两跳到 11.5：真正的坎不是版本，是实例名
+
+【背景】离线演练机把一套 SAP PRD（362G / 78,536 表 / BKPF 841 万行）从 Db2 9.7.0.9 升到 11.5.8.0。11.5 只支持从 10.5 FP7+ 或 11.1 升级，但 9.7→11.1 官方支持，所以不必找 10.5，直接两跳 9.7→11.1→11.5。实测第一跳 17 分钟、第二跳约 1 分钟，升级后 `db2updv115 -d <db>` 收尾，78,536 表 / 8,415,205 行 / 70 个表空间全 0x0000 全部对得上。
+
+【教训】①**容器标签绑死实例名**：换新实例名（db2v111）catalog 老库，先报 SQL6028N（DB2 按 `<path>/<实例名>/NODE0000` 找本地库目录），用软链骗过 catalog 后连库仍死在 `SQLB_CONTAINER_NOT_ACCESSIBLE`——db2diag 的 `sqlbContainerTagIsValid` 打出 tag 里 `ctDb2instance`、`ctDatabasePath=/db2/PRD/db2prd/NODE0000/SQL00001/` 都是老实例名，**数据库身份=实例名+路径，跨版本迁移必须用同名实例承载，改名必死**；②**文件属主不对会被当只读**：库文件属主是旧实例用户、当前实例用户只在组内 rw 时，DB2 给文件 chmod 会 EPERM，于是判成只读/不可访问（先 SQL0970N，再 SQL0293N 容器不可访问），`chown -R <实例用户>:<实例组> <库路径>` 即解；③**目录只加 g+rw 不够，要 g+rwX**：770/760 的目录组没有 x 就进不去，diag 的 ossError 会把逐级权限（如 `1000:1000:760 (C0000000.TMP)`）直接打出来；④**db2idrop 在 root 安装下报废**（报 `not in the current DB2 copy path,""`），db2iupdt 又不允许降级（DBI1978E），只能 `db2greg -delinstrec instancename=X`（先备份 global.reg）→ 把 `$HOME/sqllib` 改名留档 → `db2icrt`，且 **db2icrt 必须 root 执行**（非 root 报 DBI1052E）、执行前 `unset LD_LIBRARY_PATH`（否则镜像移来的软件树混用旧实例库，报 `undefined symbol: ossSnprintf`）；⑤**日志路径标签里也有实例名**：第二跳报 `SQL5099N LOGPATH 原因码 5`（=路径被另一个数据库占用），根因是错误实例尝试在 `LOGSTREAM0000/SQLLPATH.TAG` 里写了旧实例名，该字段是定长 8 字节（偏移 23），改对即可、不用删日志；⑥升级中 `SYSIBMADM` 两个包 rebind 失败（-2453 / DBMS_RANDOM_INITIALIZE，"Failed to initialize any COS APIs"），跑 `db2updv115` 后清零。
+
+【复用建议】接"数据库跨大版本升级"的活先做三件事：①查目标版本官方支持的源版本清单，别默认能直升（9.7→11.5 不行，9.7→11.1→11.5 可以）；②**保持实例名和库路径不变**——DB2 把实例名写进了容器 tag 和日志路径 tag，改名等于换库；③升级不是 connect 自动完成的，`SQL5035N` 之后必须显式 `db2 upgrade db`，完事再跑对应版本的 `db2updv115`。排障优先看 db2diag 里的 `sqlbContainerTagIsValid` / `ossErrorIOAnalysis`，它们会把期望值、实际值和逐级权限直接打印出来。

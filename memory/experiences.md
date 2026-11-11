@@ -414,3 +414,16 @@ ALTER SYSTEM SAVEPOINT;
 5. **HANA 端口从应用机打不通先看 firewalld**：新机默认只开 ssh/22，`No route to host` 不是网络问题是防火墙。
 
 【复用建议】接"应用改数据库指向"的活，先确认三件事：①目标库的数据从哪来（是不是还原的，还原的 SYSTEM 大概率带 414）；②目标租户里业务 schema 和表数对不对（`SYS.TABLES` 按 schema 计数）；③hdbuserstore 里有没有能复用的旧口令。三件都过了再动 profile，否则改完照样起不来。验证终点是 `R3trans -d` 返回 0000 + HANA 侧 `M_CONNECTIONS` 里能看到应用机的大量业务用户连接。
+
+## 2026-11-11 HANA 备机体检别只看 SR：真正的雷在备机 /hana 上
+
+【背景】一套 HANA 双机 HA 的 SAP B1 系统，备机 SR 三服务 SYNCMEM/ACTIVE 全绿、集群无 Failed action，但备机 /hana 已 96%（480G 用 461G，仅余 20G）。往下挖：①租户数据卷文件 313G，`M_VOLUME_FILES` 里 DATA 只 USED 18.5G（约 294G 已分配未使用），主备同款；②备机租户日志卷 97G（99 个 1G 段），主库同卷才 44G，是 SR 连接重建后一次追平涌入的；③11-10 已经爆过一次盘——backup.log 里日志备份连续 `rc=28 No space left on device`，因为备份 basepath 走 NFS 落在备机本地盘，旧全备被清到只剩 2 份；④租户 SR 连接 11-10 09:27 才重建，此前连接断过。
+
+【教训】
+1. **备机 /hana 常常就是备份归档的落点（NFS server）**，它满 = 日志备份全断，但 SR/集群指标可以完全正常，常规监控看不出来。备机磁盘要和主库同等级盯。
+2. `du` 大不等于数据多：先查 `M_VOLUME_FILES` 的 `USED_SIZE/TOTAL_SIZE`。数据卷只扩容不缩容，一次大批量写入+删除就能留下几百 G 的"已分配未使用"，且在线无法缩回。
+3. SR 重连后日志卷会一次性涨大（本例备机 44G→97G），这部分空间同样退不回去。
+4. HANA 的 `#health_disk`/sysinfo 是 8G 级别的兜底，20G 余量照样 green——拿它当容量告警等于没有。
+5. 备份保留策略要按"这块盘实际能放几份"算，不能拍脑袋 7 天：7 天 × ~23G 在 480G 盘上根本不成立，一旦爆盘运维就会去删旧备份，可恢复窗口实际只剩 1-2 天。
+
+【复用建议】HANA HA 巡检固定加三问：①主备两边 `df /hana` 各多少，data/log/backup 三块拆开对比；②`M_VOLUME_FILES` 里 data/log 的 used vs total，差值大就是历史扩容垃圾；③备份 basepath 落在谁的盘上、那块盘还剩多少、下一份全备多大。**备机余量 < 下一份全备大小 = 当天必须处理**，否则第二天凌晨的定时全备就会把盘占满。

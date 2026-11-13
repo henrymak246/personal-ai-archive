@@ -479,3 +479,18 @@ ALTER SYSTEM SAVEPOINT;
 4. **验"生效值"用 SUSR_USER_AUTH_FOR_OBJ_GET 的 VALUES**（FIELD/VON/BIS），比 UST04/RFC_READ_TABLE 更接近用户实际能过的检查；RFC_READ_TABLE 会读到表缓冲旧值。
 
 【复用建议】OA 权限类工单的闭环标准：① 按工单账号 + USR02 最近登录确认"人-账号"对应 → ② 用参考账号逐对象 diff 出缺口（角色/档案/事务码/库位）→ ③ BAPI 全量合并赋角色与档案 + PRGN 用户比较 → ④ SUSR_USER_AUTH_FOR_OBJ_GET 终验目标对象值 → ⑤ 才回单。改前留快照，改后验原有权限无丢失。
+
+## 2026-11-13 广药 PRD HANA 双机 HA 全量搭建：重建 → SR → Pacemaker 的四个坑
+
+背景：广药 228 旧生产迁移前置，需在 10.150.67.11/.12（Xfusion 2288H V5，72C/1509G）先把 HANA 高可用建好。当天用 SID=PRD 重装两台（hdblcm 静默安装，MDC：SYSTEMDB 30013 + 租户 PRD 30015，卷/备份加密全关），随后完成系统复制（SiteA/SiteB，sync+logreplay，端口 40006 走 SR 直连 bond1）与 Pacemaker 2.1.10 + Corosync 2.4.6 + SAPHanaSR 0.162.5 集群，VIP 10.150.67.21 挂 bond0，双向切换实测通过（standby → t+60s 提升并漂移 VIP；online → t+60~80s 自动重注册备机）。
+
+**教训：**
+
+1. **sr_enable 之前必须先做一次全备**，否则 hdbnsutil -sr_enable 直接拒绝：Backup has not yet been executed on primary system。
+2. **备站点注册报 Peer not trusted / Certificate verification failed**：按 SAP Note 2369981，把主库 /usr/sap/PRD/SYS/global/security/rsecssfs 下 data/SSFS_PRD.DAT 与 key/SSFS_PRD.KEY 拷到备库同路径，并把备库实例目录（/usr/sap/PRD/HDB00/<主机名>/security/*）的证书移走，让备库启动时用新 SSFS 重建实例证书，再 sr_register。
+3. **remoteHost does not match**：SR 走独立直连链路时，/etc/hosts 必须把主机名 prdhanadb01/02 解析到 SR 地址（10.0.0.1/.2），业务地址另加 -biz 别名，两台严格一致；否则 sr_register 的 --remoteHost 与库内登记的地址对不上。
+4. **rc=8 最阴的坑**：未配置 HA-DR Provider 时 clone_state/sync_state 属性为空，资源代理在 role=Slave 的 monitor 阶段返回 OCF_RUNNING_MASTER(8)，crm 判为 "expected ok but got promoted"，叠加 migration-threshold 会立刻 ban 节点并停 HANA。修复 = global.ini 增加 [ha_dr_provider_SAPHanaSR]（execution_order=1）与 [ha_dr_provider_susChkSrv]（execution_order=3，action_on_lost=stop，stop_timeout=25），/etc/sudoers.d/sap_hana_sr 放行 prdadm 执行 crm_attribute -n hana_prd_*，重启 HANA 后钩子写 hana_prd_site_srHook_SiteA=PRIM / _SiteB=SOK，再 crm resource cleanup。
+5. crmsh 4.6 的 rsc_defaults 对象 ID 是 build-resource-defaults，`crm configure show rsc_defaults` 会报 object does not exist，但 `crm configure rsc_defaults migration-threshold=5000` 其实已生效；核对用 `crm configure show | grep -A3 rsc_defaults`。
+6. 手册交付：docx 静态目录要真实页码只能两遍构建——第一遍占位渲染 PDF，逐页提取文本定位标题得页码，第二遍回填；PDF 取文本时 CJK 与拉丁字符之间的空格会丢失（如 "3.3 节点间SSH 互信"），标题匹配必须先去掉全部空白再比。
+
+**可复用结论：** HANA HA 的标准实施顺序 = 装机（MDC + 加密全关）→ 一次全备 → sr_enable → 备机 PKI/SSFS 处理 + sr_register → 三服务 ACTIVE → corosync/stonith 基础 → SAPHanaTopology + SAPHana 资源 → HA-DR Provider 钩子 + sudoers → VIP 资源 + colocation/order → 双向切换实测。顺序里缺第 8 步，Slave 节点必然在 monitor 里爆 rc=8。

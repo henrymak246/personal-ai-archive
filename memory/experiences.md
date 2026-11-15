@@ -494,3 +494,16 @@ ALTER SYSTEM SAVEPOINT;
 6. 手册交付：docx 静态目录要真实页码只能两遍构建——第一遍占位渲染 PDF，逐页提取文本定位标题得页码，第二遍回填；PDF 取文本时 CJK 与拉丁字符之间的空格会丢失（如 "3.3 节点间SSH 互信"），标题匹配必须先去掉全部空白再比。
 
 **可复用结论：** HANA HA 的标准实施顺序 = 装机（MDC + 加密全关）→ 一次全备 → sr_enable → 备机 PKI/SSFS 处理 + sr_register → 三服务 ACTIVE → corosync/stonith 基础 → SAPHanaTopology + SAPHana 资源 → HA-DR Provider 钩子 + sudoers → VIP 资源 + colocation/order → 双向切换实测。顺序里缺第 8 步，Slave 节点必然在 monitor 里爆 rc=8。
+
+## 2026-11-15 广药 239.78 QAS 租户还原 + 239.76 应用对接验证（HANA 2.0 MDC）
+
+背景：广药 QAS 源库在 238.53（HANA 1.0 实例01），11-10 全备 183.8G 已在 239.78（HDT/00，HANA 2.0 SPS09）就位。当天新建 QAS 租户并整库恢复，然后用 239.76（SAP 应用机，SID PRD）改指 QAS 租户拉起做还原验收。
+
+**教训：**
+
+1. **RECOVER DATA FOR <租户> USING FILE 的括号里给前缀路径，不要给逗号分隔的 _databackup_N_M 文件清单**：后者报 257 语法错（incorrect syntax near ","），给前缀（如 '/hana/shared/qas_full_20261110/QAS_full_20261110'）带 CLEAR LOG 才能成功；183.8G 恢复约 16 分钟，期间 /hana/data 持续增长，恢复期间 M_DATABASES 状态是 STARTING/RECOVERY，完成后 YES/ACTIVE。
+2. **还原会把 SYS.USERS 一起带回**：QAS 租户 SYSTEM 口令变回源库口令（Xxaq8440），这次没有出现 PRD 还原时的 414 强制改密死结；应用连接用户 SAPGPC 的口令也是备份时点的旧值（与源库当前口令不同），需以 SYSTEM 执行 `ALTER USER SAPGPC PASSWORD "..."` 重置。恢复完整性快速判据：`SELECT COUNT(*) FROM SYS.TABLES WHERE SCHEMA_NAME='SAPGPC'` 与源库一致（本次 111,247）。
+3. **用现成应用服务器验证还原库的最小改动**：只改 DEFAULT.PFL 的 `dbs/hdb/dbname`（PRD→QAS）与 hdbuserstore 指向新租户 SQL 端口，SAPDBHOST/schema 不动；前提是两边 SVERS 版本一致（本次同为 750），否则内核启动就会因版本不匹配失败。这属于测试手段，SID 仍是原系统，不是正式迁移。
+4. **租户 SQL 端口 = SYS_DATABASES.M_SERVICES 里该库 indexserver 的内部端口 +1**（PRD 30040→30041，QAS 30046→30047），xsengine 另占一个；firewalld 要按应用机源网段单独放行新端口（否则 TCP 直接 No route to host）。
+5. **验收闭环口径**：dev_w0 出现 `database name/instance=<租户>/00` + `database user=SAPGPC` → `R3trans -d` 0000 → `/sap/bc/ping`（带 sap-client 与 Basic 认证，如客户端 101 + SAP*:pass）200 → 数据库侧 M_CONNECTIONS 出现应用主机连接 → SNAP 当日 0 条 dump。T000 客户端清单可佐证跑的是哪套数据（QAS 有 001/100/101/102/103/106/200 等一批测试客户端）。
+6. **停启顺序 = 停 00→01、起 01→00**；disp+work 的 WP 进程要 60–90 秒才退干净，必须等 `ps -ef | grep dw.sap<SID>` 归零再 Start，否则 Start 打在 "Server shutdown" 上无效。

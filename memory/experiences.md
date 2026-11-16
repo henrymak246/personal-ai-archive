@@ -507,3 +507,16 @@ ALTER SYSTEM SAVEPOINT;
 4. **租户 SQL 端口 = SYS_DATABASES.M_SERVICES 里该库 indexserver 的内部端口 +1**（PRD 30040→30041，QAS 30046→30047），xsengine 另占一个；firewalld 要按应用机源网段单独放行新端口（否则 TCP 直接 No route to host）。
 5. **验收闭环口径**：dev_w0 出现 `database name/instance=<租户>/00` + `database user=SAPGPC` → `R3trans -d` 0000 → `/sap/bc/ping`（带 sap-client 与 Basic 认证，如客户端 101 + SAP*:pass）200 → 数据库侧 M_CONNECTIONS 出现应用主机连接 → SNAP 当日 0 条 dump。T000 客户端清单可佐证跑的是哪套数据（QAS 有 001/100/101/102/103/106/200 等一批测试客户端）。
 6. **停启顺序 = 停 00→01、起 01→00**；disp+work 的 WP 进程要 60–90 秒才退干净，必须等 `ps -ef | grep dw.sap<SID>` 归零再 Start，否则 Start 打在 "Server shutdown" 上无效。
+
+## 2026-11-16 广药 DEV→QAS 定向导入 + EV_TP_ALOG 残留值陷阱
+
+背景：梁志海 CR984 传输单停在「系统管理员DEV传输QAS变更」节点，请求号 DEVK904297（QAS 缓冲区 BUFPOS 001804，IMPFLG=k 未导入）。在 QAS 上用 AIR 调 TMS_MGR_IMPORT_TR_REQUEST 完成试导入+真导入。
+
+**教训：**
+
+1. **DEV→QAS 定向导入在目标系统（QAS 239.227）上执行**：IV_SYSTEM='QAS'、IV_DOMAIN='DOMAIN_DEV'、IV_CLIENT='101'；先 IV_TEST_IMPORT='X' 试导入，再真导入 IV_CMD_IMPORT=' '；执行器 sapdev_patch/air_run_qas.py（RFC 用户 SAP*/pass，LANG 必须 EN）。
+2. **EV_TP_ALOG 可能是残留值**：本次真导入返回 ALOG2647.PRD，但 QAS 上 /usr/sap/trans/log/ALOG2647.PRD 根本不存在（ABAP OPEN DATASET 读 rc=8）；真实记录在 ALOG2647.QAS：DEVK904297 QAS:101 I 0000 20261116083552，收尾 V/G 0000 约 5 分钟后出现。判断是否导到生产不能看这个参数，要回各系统查 E070。
+3. **验证三件套**：目标系统 E070 出现 <TR> <类型> R <目标系统> <当天>、E071 对象齐、TADIR 有对象；同时查另一系统 E070 为空，并用一个已知已导入的请求做对照读，排除读表被缓冲/连错系统。
+4. **tp 后台跑分阶段落 ALOG**：P（试导入）→ I（真导入）→ V/G（校验/生成），V/G 出现才算完全落定；TMSBUFFER 的 IMPFLG 不会因这条路径回写（仍为 k/w），不能拿它当是否导入的依据。
+
+**可复用结论：** 定向导入的结果判定以 ALOG 的目标系统文件 + E070/E071/TADIR 为准；FM 返回参数（ALOG 名、缓冲标志）都可能误导。

@@ -520,3 +520,21 @@ ALTER SYSTEM SAVEPOINT;
 4. **tp 后台跑分阶段落 ALOG**：P（试导入）→ I（真导入）→ V/G（校验/生成），V/G 出现才算完全落定；TMSBUFFER 的 IMPFLG 不会因这条路径回写（仍为 k/w），不能拿它当是否导入的依据。
 
 **可复用结论：** 定向导入的结果判定以 ALOG 的目标系统文件 + E070/E071/TADIR 为准；FM 返回参数（ALOG 名、缓冲标志）都可能误导。
+
+
+## 2026-11-19 广药 PRD 备份还原 + SR 收尾 & 报表事务码专用角色建法
+
+背景：上午把老生产(172.16.0.13)全备 456.8 GiB 传到新生产 .11（8:14–10:18，均速 66.36 MB/s≈531 Mbps，单 SSH 连接约 64 GiB 被切、脚本 20 轮续传），MD5 双端核验后恢复 PRD 租户并重建 SR；下午处理李敏(DJK_LIM)权限单（ZFIDA01-04/ZCOCMLB_DJK/ZCOCMLB_DJK_N）。
+
+**教训：**
+
+1. RECOVER ... USING FILE 前缀不能再带 _databackup（HANA 自动补 _databackup_N_M），带成双份报 [2000004] Cannot open file，且约 5 秒返回 rc=0 是假成功——必须看 M_DATABASES 状态与耗时。本次 1165s 恢复完成，108,268 张表。
+2. 备机运行中直接 sr_register 会报 "system must be shut down before it can be registered as secondary site"，加 --online 一次通过；M_SERVICE_REPLICATION 在 SYSTEMDB 只看得到 1 行(30001)、租户 PRD 里还有 2 行(30003/30007)，三行都 ACTIVE 且 SECONDARY_ACTIVE_STATUS=YES 才算全同步（列值是 YES/NO 不是 TRUE）。
+3. SR 全同步后要退出集群维护模式（crm_attribute --type crm_config --name maintenance-mode --update false），退出后资源应回到 Master/Slave + VIP 正常（本次 12:41 退出：prdhanadb01 Master / prdhanadb02 Slave，VIP 10.150.67.21 在 .11）。
+4. PRD 上 SAP*(client 101) 已被锁（too many failed attempts），ABAP 执行改用 GPC_GW/101 的 RFC_ABAP_INSTALL_AND_RUN（其 S_DEVELOP 全 *），AIR 在 101 运行 sy-mandt=101，可直接建/改该 client 的角色。
+5. **自定义参数文件名的角色建法**：AIR 直插 AGR_DEFINE/TEXTS/FLAGS(6 行)/TIME/TIMEC/TCODES/HIER/1250/1251/1252 后，**先插 AGR_1016(PROFILE=想要的档案名) 再跑 PRGN_GEN_PROFILES_FOR_ROLES，生成即保留该名字**（本次 ZDJK_ZFIDA）；否则生成的是 T- 系统临时档案名（DEV 10-20 先例 T-DV040233）。AGR_1250/1251 的 AUTH = 档案名||'00'。生成成功判据=et_return 空 + UST10S 有对象 + S_TCODE 全命中。
+6. 报表类角色的授权对象镜像同族角色：广药 ZDJK_FI_* 报表角色统一 = S_TCODE + F_BKPF_BUK(ACTVT=*, BUKRS 用变量 $BUKRS, 具体公司代码放 AGR_1252 LOW=G0B0) + S_GUI + S_BDS_DS；菜单为空也能正常生成参数文件。
+7. BAPI_USER_ACTGROUPS_ASSIGN 与 BAPI_USER_PROFILES_ASSIGN 都是全量替换：先读 AGR_USERS(含 FROM_DAT/TO_DAT)与 UST04 全量并集再传，原角色日期保留（新角色才用 当天~99991231）；随后 PRGN_GEN_PROFILES_FOR_ROLES + IV_USERCOMPARE='X' 做用户比较，终验用 SUSR_USER_AUTH_FOR_OBJ_GET 看生效值。
+8. 工单里的码先查 TSTC：ZCOCMLB_DJK_N 在 PRD 根本不存在，只能回单说明；同单其余 5 码全部落地（角色 22→23、档案 28→30、S_TCODE 182→187，零丢失）。
+
+**可复用结论：** 广药「报表/测试事务码」授权走专用角色（不要手工档案），模板照抄同族 ZDJK_FI_*；建角色+生成+赋权+终验全链可纯 RFC 完成，前后快照固定落 sapdev_patch/gy_lm_snapshot_1119.json 与 gy_lm_after_1119.json。

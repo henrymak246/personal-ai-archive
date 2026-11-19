@@ -538,3 +538,17 @@ ALTER SYSTEM SAVEPOINT;
 8. 工单里的码先查 TSTC：ZCOCMLB_DJK_N 在 PRD 根本不存在，只能回单说明；同单其余 5 码全部落地（角色 22→23、档案 28→30、S_TCODE 182→187，零丢失）。
 
 **可复用结论：** 广药「报表/测试事务码」授权走专用角色（不要手工档案），模板照抄同族 ZDJK_FI_*；建角色+生成+赋权+终验全链可纯 RFC 完成，前后快照固定落 sapdev_patch/gy_lm_snapshot_1119.json 与 gy_lm_after_1119.json。
+
+## 2026-11-20 旧 OA（蓝凌 KMSS）待办接口与只读巡检做法
+
+背景：把 oa.gybys.com.cn 加入小时级巡检队列，只拉待办列表不处理。
+
+**教训：**
+
+1. 旧 OA 是**蓝凌 KMSS**（com.landray.kmss.*），不是泛微；登录走 ACEGI 表单 `/j_acegi_security_check`（j_username/j_password/logintype=1），无验证码；登录成功判据 = `/sys/portal/page.jsp` 页面里含 `CurrentUserId`。
+2. 待办不要解析门户 portlet 的 HTML，直接调数据接口 `sysNotifyMainIndex.do?method=list&dataType=todo&fdType=13&fdCateId=&rowsize=200&pageno=N`，返回 `{columns,datas,page}` JSON（前面可能有换行，从第一个 `{` 解析）。
+3. **分页参数是 `pageno`（全小写）**；`currentPage` / `pageNo` / `page` / `page.pageSize` 全部无效，`rowsize` 才生效。待办 = fdType 13，待阅 = fdType 2 的 getCount 接口。
+4. 行字段：`fdId`、`todo.subject4View`（标题，含 HTML 需剥标签）、`docCreator.fdName`（提交人）、`fdCreateTime`、`lbpmCurrNode.value`（当前节点）。
+5. 新单检测台账独立（old_todo_seen.json），首次运行输出全量 BASE 基线、之后只报 NEW，避免第一轮把存量全部当新单刷屏。
+
+**可复用结论：** 遗留系统接巡检先探「数据接口」而不是「页面」，接口一次探明后脚本百行内可稳定运行；旧系统一律只读，处置仍留人工。

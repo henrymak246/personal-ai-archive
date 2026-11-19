@@ -607,3 +607,16 @@ ALTER SYSTEM SAVEPOINT;
 5. SAPHanaSR RA 的 WaitforStarted 用的是 start 操作超时的 95%（op start timeout=3600s → 3420s），与 `HANA_CALL_TIMEOUT=60s`（仅用于 hdbnsutil/landscape 调用）无关——启动"56 秒就失败"不是超时，是实例被外部停掉。
 
 **可复用结论：** HA 故障复盘把"注册/启动/封禁/回切"四段分开取证（RA 日志 + nameserver trace + prdadm/root bash_history 三条线交叉），比只看 crm_mon 状态快得多；手工测试必须走维护模式，否则人工动作与资源代理会互相踩踏。
+
+## 2026-11-20 广药新PRD HA 心跳平面核查（测试方：只有一组心跳不符合华为官方设计）
+
+背景：广药新 PRD（.11/.12）测试方提出 corosync 心跳只有一组。实查属实：`corosync.conf` 仅 ring0（bond2 直连 10.0.0.5/.6，udpu/5405），无 rrp_mode；网络平面=bond0 业务 10.150.67.x+VIP / bond1 SR 直连 10.0.0.1-.2 / bond2 心跳直连 10.0.0.5-.6，nic2-5 空闲 i10G 未接线。
+
+**教训：**
+
+1. 双节点集群（two_node:1）+ 单心跳平面 = 心跳链路或交换机单点故障即触发 fence/切库；华为 SAP HANA 高可用设计要求的「两个独立心跳平面」应落成 corosync 双 ring（rrp_mode: passive + nodelist ring1_addr），物理上分属不同网卡与交换机。
+2. 评估时要区分「物理双网卡」和「协议双环」：LACP bond 只是链路级冗余，同一 bond 双成员接同一交换机仍是一个心跳平面。
+3. 给客户的整改分两级：过渡（ring1 复用业务网 bond0，零布线，10 分钟滚动变更、不重启 HANA）与正式合规（用空闲 nic2/nic3 新建独立心跳 bond3，需客户布线/配端口）。
+4. 滚动变更顺序：备份 conf → 两节点同改 → maintenance-mode=true → 先备机后主机 restart corosync → `corosync-cfgtool -s` 确认两条 ring active → 退出维护模式；HANA 与 SR 不受 corosync 重启影响。
+
+**可复用结论：** HA 验收前先对三张表——网络平面表（业务/SR/心跳/管理各几张卡几台交换机）、corosync ring 表、Pacemaker 资源表；「有几个 bond」不等于「有几个心跳平面」。

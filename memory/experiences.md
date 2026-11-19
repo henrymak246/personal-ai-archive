@@ -593,3 +593,17 @@ ALTER SYSTEM SAVEPOINT;
 5. 客户版仍需保留诚实边界：DBSL ≥1100、Db2 11.5/11.1 许可与介质、SAP PAM 官方 OS 支持待确认需书面确认；不承诺性能百分比。
 
 **可复用结论：** 对外方案 = 现状痛点 + 两步走路径 + 可量化收益 + 一表费用 + 计划与前提；技术细节全部留在内部技术版，客户版控制在 6–8 页。
+
+## 2026-11-20 广药新PRD HANA HA「切换后无法自动注册」定案（手工操作打断集群接管）
+
+背景：用户报 11-19 切换后新 PRD（10.150.67.11/.12，SID=PRD，Pacemaker+SAPHanaSR 0.162.5）备节点无法自动注册。复查日志还原：17:58 .11 整机重启 → corosync 判死 → fence + 提升 .12；.11 重启后 HANA 因 `Autostart=1` + SAPPRD_00.service 自启成"重复主库"，被 stop_clone 停了 4.5 分钟；18:06:42 资源代理**自动注册成功**（Register successful），但 18:07:14 有人手工执行 `hdbnsutil -sr_register --remoteHost=SiteB --name=prdhanadb01`（SiteB 是站点名不是主机名）被拒，紧接着 `HDB stop` 把集群正在启动的实例停掉 → WaitforStarted 失败 → start 失败 → **fail-count(start)=INFINITY 节点被封禁**（"reaching migration threshold"）。18:13 `crm_resource --cleanup` 后立即恢复。18:19 .12 同样自动注册成功，又被手工注册+`HDB stop` 打断，18:33 手工正确注册+启动后 SOK。
+
+**教训：**
+
+1. "无法自动注册"先分清两件事：注册（hdbnsutil -sr_register）与注册后启动（sapcontrol Start）。本案注册两次都成功，卡点是启动被打断 → start fail-count=INFINITY → 节点封禁，需 `crm_resource --cleanup` 解封，这是 Pacemaker 对 start 失败的设计行为，不是 AUTOMATED_REGISTER 失效。
+2. 集群托管期间严禁手工 `HDB stop/start` 或 `hdbnsutil -sr_register`；要手工测试先 `crm_attribute -n maintenance-mode -v true -t crm_config`（或 `crm resource unmanage msl_SAPHana_PRD_HDB00`），结束再恢复。
+3. sr_register 参数口径：`--remoteHost` 填**主机名**（prdhanadb02），`--name` 填**站点名**（SiteA/SiteB）；写反报错分别是 "resolving 'siteb' failed" 和 "system must be shut down before it can be registered as secondary site"（后者是系统在线时用了非 --online）。
+4. HA 节点应设 HANA profile `Autostart=0`，让数据库只由 Pacemaker 启停；否则重启后先起成重复主库，被集群强制停库，白白延长恢复窗口数分钟。
+5. SAPHanaSR RA 的 WaitforStarted 用的是 start 操作超时的 95%（op start timeout=3600s → 3420s），与 `HANA_CALL_TIMEOUT=60s`（仅用于 hdbnsutil/landscape 调用）无关——启动"56 秒就失败"不是超时，是实例被外部停掉。
+
+**可复用结论：** HA 故障复盘把"注册/启动/封禁/回切"四段分开取证（RA 日志 + nameserver trace + prdadm/root bash_history 三条线交叉），比只看 crm_mon 状态快得多；手工测试必须走维护模式，否则人工动作与资源代理会互相踩踏。

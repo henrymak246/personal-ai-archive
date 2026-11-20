@@ -624,15 +624,15 @@ ALTER SYSTEM SAVEPOINT;
 
 ## 2026-11-20 广药新PRD HA 方案A双心跳落地（维护模式退出触发受控接管的教训）
 
-背景：用户拍板「先用方案A…自动注册问题的改动也一起做」。在 10.150.67.11/.12（SID=PRD，Pacemaker 2.1.10 + SAPHanaSR 0.162.5）落地 corosync 双心跳环（rrp_mode: passive；ring0=bond2 直连 10.0.0.5/.6，ring1=bond0 业务网 10.150.67.11/.12，udpu；两节点同一份 conf，md5 cbd08e23…），并把两节点 HANA profile 第 6 行 。过程：备份 conf/profile → maintenance-mode=true → 先备机后主机 restart corosync → 双机  两条 ring active with no faults → 退出维护模式。
+背景：用户拍板「先用方案A…自动注册问题的改动也一起做」。在 10.150.67.11/.12（SID=PRD，Pacemaker 2.1.10 + SAPHanaSR 0.162.5）落地 corosync 双心跳环（rrp_mode: passive；ring0=bond2 直连 10.0.0.5/.6，ring1=bond0 业务网 10.150.67.11/.12，udpu；两节点同一份 conf，md5 cbd08e23…），并把两节点 HANA profile 第 6 行 `Autostart=1` 改为 `Autostart=0`。过程：备份 conf/profile → maintenance-mode=true → 先备机后主机 restart corosync → 双机 `corosync-cfgtool -s` 两条 ring active with no faults → 退出维护模式。
 
-**意外与处理（重要）：** 退出维护模式（08:05:35）后，.11 的 pacemaker-controld 因 corosync 重启连带重启（PID 3289→3531405），瞬态节点属性（clone_state/master score）被清空；集群按 SAPHanaSR 标准逻辑 + PREFER_SITE_TAKEOVER=true，把 SOK 备站 .12 判为可接管节点并提升为主（08:08:28，susChkSrv TAKEOVER 事件），同时停掉 .11 的 VIP（08:07:05）；.11 旧主库被 RA 停库后于 08:09:01-04 自动  **Register successful**，回到 SiteA 备站并追平（SOK）。VIP 10.150.67.21 中断约 3 分 51 秒（08:07:05-08:10:56）后落到 .12，ping 0 丢包；全程无应用写入口（VIP 已停），但若应用直连 .11 单机 IP，08:08:28-08:08:57 存在潜在丢写窗口。终态：Masters=[prdhanadb02]/Slaves=[prdhanadb01]，双机 7 进程 GREEN，fail-count 全 0，maintenance off。
+**意外与处理（重要）：** 退出维护模式（08:05:35）后，.11 的 pacemaker-controld 因 corosync 重启连带重启（PID 3289→3531405），瞬态节点属性（clone_state/master score）被清空；集群按 SAPHanaSR 标准逻辑 + PREFER_SITE_TAKEOVER=true，把 SOK 备站 .12 判为可接管节点并提升为主（08:08:28，susChkSrv TAKEOVER 事件），同时停掉 .11 的 VIP（08:07:05）；.11 旧主库被 RA 停库后于 08:09:01-04 自动 `sr_register --remoteHost=prdhanadb02 --name=SiteA` **Register successful**，回到 SiteA 备站并追平（SOK）。VIP 10.150.67.21 中断约 3 分 51 秒（08:07:05-08:10:56）后落到 .12，ping 0 丢包；全程无应用写入口（VIP 已停），但若应用直连 .11 单机 IP，08:08:28-08:08:57 存在潜在丢写窗口。终态：Masters=[prdhanadb02]/Slaves=[prdhanadb01]，双机 7 进程 GREEN，fail-count 全 0，maintenance off。
 
 **教训：**
 
-1. 维护模式下重启 corosync 也一定会连带重启本节点 pacemaker-controld；退出维护模式时 Pacemaker 会重算角色，**瞬态属性丢失 + PREFER_SITE_TAKEOVER=true 会让 SOK 备站抢先被提升**——做双心跳这类变更要提前预期角色可能互换，变更后先观察  收敛再交付。
+1. 维护模式下重启 corosync 也一定会连带重启本节点 pacemaker-controld；退出维护模式时 Pacemaker 会重算角色，**瞬态属性丢失 + PREFER_SITE_TAKEOVER=true 会让 SOK 备站抢先被提升**——做双心跳这类变更要提前预期角色可能互换，变更后先观察 `crm_mon` 收敛再交付。
 2. 对生产做心跳/集群类变更，把「角色可能切换 + VIP 中断数分钟」写进变更方案与用户预期；选择业务低峰窗口，并先确认应用连的是 VIP 而不是单机 IP。
-3. Autostart 的落点要逐台核对：本案  虽都是  软链，但两节点 /hana/shared 是本地盘，各只有自己的 host profile，必须分别在 .11/.12 上各改一份；改 profile 用 sed 后要 chown/chmod 还原为 prdadm:sapsys 644（sed -i 会产生 root 属主新文件）。
+3. Autostart 的落点要逐台核对：本案 `/usr/sap/PRD/SYS/profile` 虽都是 `/hana/shared/PRD/profile` 软链，但两节点 /hana/shared 是本地盘，各只有自己的 host profile，必须分别在 .11/.12 上各改一份；改 profile 用 sed 后要 chown/chmod 还原为 prdadm:sapsys 644（sed -i 会产生 root 属主新文件）。
 4. 双心跳只改配置不等于验证了断链切换；断环演练（非主节点 ring0 断 20-30 秒观察 ring1 接管）应放维护窗口单独做，并先接受 fence 风险。
 5. 变更后随手扫一眼 nameserver trace：接管/重启窗口会出现 EncryptionDistribution 取密钥失败、到旧主 40006 的 dr_* 不可达、hdbupdrep 重试等瞬态错误，只要不复发且 sr_state Host Mappings 正确即为正常。
 

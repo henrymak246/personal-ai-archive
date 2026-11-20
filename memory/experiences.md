@@ -696,3 +696,22 @@ ALTER SYSTEM SAVEPOINT;
 6. 无页码目录不受分页漂移影响（本项目两册目录只有章节名），若有页码目录每次重排后须更新域。
 
 **可复用结论：** 多文档口径同步=全文关键词扫描建清单→逐处替换→渲染逐页核对（行数、空白页、表头重复）；被占用的源文件一律另存新版本，绝不杀用户进程。
+
+
+## 2026-11-20 广药QAS 用 AIR 手工建纯 RFC 角色并全量重赋用户（DJK2021）
+
+背景：用户要求给 QAS（192.168.239.227/101）的 RPA 用户 DJK2021 加 RFC 权限。侦察发现名称最像的 ZDJK_RFC_RPA 实际只有 S_SERVICE，ZSAP_GENERAL 的 S_RFC 只放 7 个 FUGR，客户既有 ZJCK_RFC 这种「纯 S_RFC */*/16」先例。
+
+做法：
+1. 新建专用角色而不是改现有角色或挂业务大角色：AGR_DEFINE + AGR_TEXTS(中文/E 两条) + AGR_1250/AGR_1251 三行(S_RFC: RFC_TYPE=*, RFC_NAME=*, ACTVT=16) + AGR_FLAGS 五类齐全，COMMIT 后 PRGN_GEN_PROFILES_FOR_ROLES 生成参数文件 T-QS190191。
+2. 分配用 BAPI_USER_ACTGROUPS_ASSIGN，但它是全量替换语义：先从 AGR_USERS 读全部现有角色（18 个），再追加新角色一起提交，18→19。
+3. 分配后再跑 PRGN_GEN_PROFILES_FOR_ROLES iv_usercompare='X' 做用户比较（也可依赖 BAPI 自动写档案，但显式跑一遍更稳）。
+4. 三层验证：角色层 AGR_1251/AGR_1016；用户层 AGR_USERS 零丢失 + UST04 参数文件含新档案（27→28）；生效值 SUSR_USER_AUTH_FOR_OBJ_GET(DJK2021,S_RFC) 出 ACTVT=16/RFC_NAME=*/RFC_TYPE=*。
+
+坑与教训：
+- UST10S 是「参数文件 → 授权对象」一行（字段 AKTPS/MANDT/AUTH/OBJCT/PROFN），不是字段值表，行数=1 是正常，别当成缺数据；字段值看 USR12 或直接用生效值接口。
+- 老式角色表没有 AGR_1252 的需求：纯对象级 S_RFC 只用 1250/1251；组织级变量才涉及 1252。
+- BAPI 全量替换前必读现有角色，改后必做 lost-roles 差集，这是权限事故的高发点（参见历史上「全量替换式赋角色用错清单」事故）。
+- AIR 程序按 <70 字符/行编写，输出用 WRITE，多行结构体字段要先查 DD03L 再 SELECT，避免字段名猜错触发 dump。
+
+可复用结论：客户没有合适角色时，按客户命名习惯新建专用窄角色（纯 S_RFC * * 16）比复用业务大角色安全；建→赋→比→验四步固定，验证必须覆盖角色层、用户层、生效值三层。

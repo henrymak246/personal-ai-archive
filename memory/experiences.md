@@ -758,3 +758,11 @@ ALTER SYSTEM SAVEPOINT;
 DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用五层证据：实例进程全 GREEN；真实 RFC 登录成功并返回正确 SID/DB 类型；工作进程数量与类型恢复；HTTP `/sap/bc/ping` 返回 200；数据库服务器能看到来自应用机的实际连接（本次 29 条），同时 R3trans=0000、启动日志无数据库连接错误。
 
 可复用结论：SAP 启动完成不等于业务可用，至少用一次真实 RFC/HTTP 请求和 DB 侧连接数做闭环；TCP 端口能连接也可能随后被重置，不能代替协议级登录验证。
+
+## 2026-11-23 SAP TMS 测试导入卡在 dbms_type：修复文件后必须让运行实例继承环境
+
+【背景】三节点 TMS 修复中，TMSADM 认证和九条 RFC 已全部通过，但 DEV→QAS 的标准 TESTIMPORT 仍 TP=0012。详细日志唯一剩余错误是 `R3trans: environment variable dbms_type is not set`。补齐标准 `.dbenv_<hostname>.sh/.csh` 后，新登录 shell 的 R3trans 已成功，运行中的 dispatcher 却仍没有该变量；经确认仅重启 QAS D00 后，三方向标准测试全部 TP=0000。
+
+【教训】①新登录 shell 成功不等于 SAP 运行实例成功，必须看 `/proc/<dispatcher-pid>/environ`，并在实例原环境直接跑 `R3trans -d`；②`DEFAULT.PFL` 已有 `dbms/type=hdb` 时不要再误判为缺该参数，临时给 tp profile 加 `QAS/DBMS_TYPE` 也不能替代 R3trans 所需的 OS 环境变量；③修复 `.dbenv` 文件只解决“下次启动”的环境，必须用标准 `stopsap D00`/`startsap D00` 让启动代理和 dispatcher 真正重建，不能只重启某个工作进程；④TMSBUFFER 是缓存视图，测试前后的视图变化不能当作真实队列改写，更不能为消除异常手工改队列；⑤“测试通过且未正式导入”要同时用详细日志和 OS buffer 哈希证明，不能只信函数 SUBRC=0。
+
+【复用建议】同类故障按五层闭环：读取 `ES_EXCEPTION` 和 DEVP 详细日志定位真实错误 → 比对登录 shell 与运行 dispatcher 的环境 → 从本机标准模板补齐 `.dbenv` → 在获批窗口用标准方式重启最小实例范围 → 验证实例全 GREEN、dispatcher 已继承变量、实例原环境 R3trans=0000、三节点 RFC_SYSTEM_INFO 与标准 TESTIMPORT 全通。最后确认日志含 `TESTIMPORT`、`buffersync=no`、`End of Transport (0000)`，且三系统 OS buffer 哈希未变。

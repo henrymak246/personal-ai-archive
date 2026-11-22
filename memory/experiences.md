@@ -715,3 +715,15 @@ ALTER SYSTEM SAVEPOINT;
 - AIR 程序按 <70 字符/行编写，输出用 WRITE，多行结构体字段要先查 DD03L 再 SELECT，避免字段名猜错触发 dump。
 
 可复用结论：客户没有合适角色时，按客户命名习惯新建专用窄角色（纯 S_RFC * * 16）比复用业务大角色安全；建→赋→比→验四步固定，验证必须覆盖角色层、用户层、生效值三层。
+
+
+## 2026-11-22 广药 DEV 巡检：RFC_READ_TABLE 多条件会在系统里打出短转储
+
+背景：只读检查 DEV（192.168.239.226，SAP_BASIS 750 / 内核 749）状态，用 pyrfc 的 RFC_READ_TABLE 批量查表。
+
+发现：
+- 给 RFC_READ_TABLE 传多行 OPTIONS（两个条件）或请求不存在的字段名时，会返回 SAPSQL_PARSE_ERROR / FIELD_NOT_VALID 异常；**每次失败还会在 ST22 留下短转储**（SAPSQL_PARSE_ERROR / CX_SY_DYNAMIC_OSQL_SYNTAX，程序 SAPLSDTXU01）。一次巡检的 3 个失败查询就产生 99 条 dump（当日此前为 0 条，11-20/21 也均为 0）。
+- 只读巡检本身也会污染系统：这些 dump 会计入 ST22 统计，事后看 dump 时不要误判成系统故障；排查时先对照 dump 的时间戳与用户名。
+- 规避：OPTIONS 条件写成单行 AND；字段名先用 DD03L 核对再查；pyrfc 通道失败后连接仍可用，老 saprfc.py 封装会被带崩需重建连接。
+
+可复用结论：对客户 DEV/测试机做巡检，先查 DD03L 校验字段、条件单行化，再批量查询；出现大批同秒、同用户的 dump 时，先怀疑自己的查询而不是系统。

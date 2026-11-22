@@ -739,3 +739,16 @@ ALTER SYSTEM SAVEPOINT;
 4. 切换后补查目标机端口，发现 QAS 端口可连、DEV 端口尚未开放；因此只交付“停机+解析切换”，不擅自启动应用，也不把解析成功等同于数据库 ready。
 
 可复用结论：SAP 停机验收=实例状态 GRAY + OS 进程清零；数据库指向切换=备份 + 精确改行 + 系统解析验证 + 目标端口核查。每一步分开验证，尤其不要把“主机名已改”误报成“应用可启动”。
+
+## 2026-11-22 广药数据库主机改址补充：hdbuserstore 会绕过 hosts
+
+背景：上一记录中的中间方案已被用户后续指令取代；最终不是把 DEV 指到另一台新服务器，而是把原数据库主机的实际 IP 从 238.53 改为 238.73。
+
+补充经验：
+1. 改实际 IP 前用 ARP 探测与 TCP 端口双重确认新地址未占用；同时修改运行地址和 wicked 的 ifcfg 持久配置，默认网关保持不变。先加新地址、再删旧地址，并用 detached 脚本执行，避免 SSH 随旧地址失效而中断操作。
+2. `/etc/hosts` 修改后 `getent` 可能仍返回旧值，原因是 nscd 缓存；执行 `nscd -i hosts` 后再验证。
+3. ★SAP 应用不一定按 hosts 连库：DEV 的 hdbuserstore `DEFAULT` 中硬编码了旧 IP，导致 hosts 已是新地址而 R3trans 仍连旧地址。必须检查 `hdbuserstore LIST` 的 ENV，并在变更后重建该条目。
+4. 最终有效验收不是“ping 通新 IP”，而是：新地址 SSH/SQL 端口可连、HANA 各实例进程 GREEN、应用机 `R3trans -d=0000`。本次正是 R3trans 的 0012 暴露了 secure store 旧地址。
+5. 变更前检查其他应用是否仍依赖旧地址；本次旧 QAS 应用的 userstore 已改指另一台 QAS 数据库，因此无需跟着变更。
+
+可复用结论：SAP 数据库换址的完整清单=实际网卡地址 + 持久网络配置 + 本机/应用机 hosts + 名称缓存 + hdbuserstore + R3trans；漏掉 secure store 会出现“解析全对但应用仍连旧库”。

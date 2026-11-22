@@ -766,3 +766,11 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①新登录 shell 成功不等于 SAP 运行实例成功，必须看 `/proc/<dispatcher-pid>/environ`，并在实例原环境直接跑 `R3trans -d`；②`DEFAULT.PFL` 已有 `dbms/type=hdb` 时不要再误判为缺该参数，临时给 tp profile 加 `QAS/DBMS_TYPE` 也不能替代 R3trans 所需的 OS 环境变量；③修复 `.dbenv` 文件只解决“下次启动”的环境，必须用标准 `stopsap D00`/`startsap D00` 让启动代理和 dispatcher 真正重建，不能只重启某个工作进程；④TMSBUFFER 是缓存视图，测试前后的视图变化不能当作真实队列改写，更不能为消除异常手工改队列；⑤“测试通过且未正式导入”要同时用详细日志和 OS buffer 哈希证明，不能只信函数 SUBRC=0。
 
 【复用建议】同类故障按五层闭环：读取 `ES_EXCEPTION` 和 DEVP 详细日志定位真实错误 → 比对登录 shell 与运行 dispatcher 的环境 → 从本机标准模板补齐 `.dbenv` → 在获批窗口用标准方式重启最小实例范围 → 验证实例全 GREEN、dispatcher 已继承变量、实例原环境 R3trans=0000、三节点 RFC_SYSTEM_INFO 与标准 TESTIMPORT 全通。最后确认日志含 `TESTIMPORT`、`buffersync=no`、`End of Transport (0000)`，且三系统 OS buffer 哈希未变。
+
+## 2026-11-23 SAP 老系统 stopsap 卡在历史主机别名：用 SAPControl 停机并独立验收
+
+【背景】关闭一套已退役旧 QAS 的 D00 与 ASCS01 时，老版本 `stopsap D00` 长时间没有进入实际停实例阶段。进程树显示辅助脚本仍在依次 ping 多个历史虚拟主机别名，源码定位为 `isVHostLocal()` 预检查。只终止了卡住的辅助脚本，没有杀 SAP 工作进程，随后改用标准 SAPControl 按 D00→ASCS01 顺序完成停止。
+
+【教训】①老 `stopsap` 可能先做主机别名连通性检查，卡住不代表正在停数据库或工作进程；先看进程树和脚本调用链，不要直接强杀 disp+work。②`sapcontrol -nr N -function StopWait 300 10` 可绕过这层老脚本预检查，仍是 SAP 标准停机接口；后台执行并写日志可避免远程调用超时中断停机序列。③D00 停止后 RFC/3300 连接重置是预期现象，不能因此误判停机失败；此时可直连 SAPHostAgent 的 SAPControl SOAP，用 `GetProcessList` 读取最终状态。④验收必须覆盖 D00 与 ASCS01，进程为 `SAPControl-GRAY / Stopped`，并复核原应用端口不再监听；仅停 D00 不能宣称整个 SAP 应用已关闭。
+
+【复用建议】退役系统停应用按“记录实例与 PID→按 D00、ASCS 顺序 StopWait→直连 SAPControl 验收→检查应用端口”执行。远程 SOAP 请求使用命名空间 `urn:SAPControl`，端口为 `50013 + 实例号×100`。操作范围中明确排除数据库，整套流程不调用任何数据库停止命令。

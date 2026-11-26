@@ -855,3 +855,12 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①“老应用/老数据库”在物理机上往往不是独占：停整机或整实例前必须列全同机 SID/实例（ls /usr/sap、sapservices、ps -u 各 adm），只停目标实例而不是“顺手全关”。②判断“没人用”不能凭应用已停，要用 ss -tnp 看 HANA 端口上有没有非 127.0.0.1 的 ESTAB：本次 .73 两套库全部连接都是本机内部服务，才敢停 DEV；若 QAS 有外部连接而停错实例就会造成事故。③旧机上的幽灵 socket 会误导：IP 从旧机迁到云上后，旧机进程的既有 socket 仍显示旧 IP（.225 上 jstart/sapstartsrv 仍绑定 .226），靠 ip -4 addr 与 ip neigh 对比 MAC 才能确认 IP 归属、排除“双主 IP”。④关自启要留备份、要精确：改 sapservices 只注释目标行（sed 前缀注释 + cp -a 备份），同机其它系统自启保持原样；应用机用 systemctl disable sapinit 阻止整机重启拉起。⑤关停完成后必须回头验证新环境（实例 GREEN、R3trans 0000、崩溃计数无新增），证明老环境不是新环境依赖。
 
 【复用建议】下线清单：①列同机所有 SID/实例与账号②ss 查目标端口真实连接（排除本机回环）③ip addr+neigh 核对 IP 归属与幽灵 socket④停目标实例（HDB stop 记录 Stop/WaitforStopped 时间）⑤注释 sapservices 目标行并备份⑥应用机 disable sapinit 并停目标 sapstartsrv⑦停后复核新系统健康与关键计数无变化⑧报告写明“哪些没动”（QAS/DAA/主机电源）与回退步骤。
+
+
+## 2026-11-26 SAP 应用服务器"内存爆满"先对照内核版本：老内核 ES 在启动期全量落页
+
+【背景】广药 DEV 应用迁到云上 32GB 新机后 free 显示 used 31GB、available 不足 500MB，用户认为与 QAS 同配置不该如此。实测两机同为 8C/32GB，profile 都无 em/initial_size_MB、PHYS_MEMSIZE、es/* 参数，dev_disp 都显示 ES 分配约 22GB（22088 vs 22096MB），但 Shmem 30.2GB vs 4.1GB。区别是 DEV 内核 749 PL101（2016 构建）在 EsStdInit 时把 22GB ES 一次性写实，QAS 内核 754 按需提交；DEV 全部 WP 空闲、1 小时内 Shmem 不增长，排除泄漏。
+
+【教训】①SAP 的 ES"已分配"不等于"已占物理内存"：老内核在启动期初始化整段 ES 会把它全部计入 Shmem/Cached，新内核按需 fault；同 profile 同内存的两台机可以差 7 倍。②判断是否泄漏看"空载 + 时间趋势"：本次所有 WP Wait、无用户、Shmem 1 小时稳定，即可排除业务占用与泄漏。③比较配置要落到运行时：dev_disp 的 EsStdInit 行、sappfpar 输出、实际 profile（多次 grep 大小写/通配），不能只看文件大小或 WP 数（QAS WP 更多反而更省）。④无 root SSH 的主机可用 ABAP CALL 'SYSTEM' 以 <sid>adm 身份取 free/meminfo/dev_disp（注意 shell 重定向只作用于最后一条命令，多条命令要用子 shell 括起来）。
+
+【复用建议】排查"SAP 应用机内存高"：①free -m + /proc/meminfo（Shmem/Cached/Swap）②vmstat 看 si/so 是否在换页③sapcontrol ABAPGetWPTable 看是否有活跃用户/程序④dev_disp 看 EsStdInit 与内核 release⑤对比同配置正常机⑥结论按"内核行为/真实占用/泄漏"三分类给处置（调 em/initial_size_MB 或升内核）。

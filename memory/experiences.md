@@ -864,3 +864,14 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①SAP 的 ES"已分配"不等于"已占物理内存"：老内核在启动期初始化整段 ES 会把它全部计入 Shmem/Cached，新内核按需 fault；同 profile 同内存的两台机可以差 7 倍。②判断是否泄漏看"空载 + 时间趋势"：本次所有 WP Wait、无用户、Shmem 1 小时稳定，即可排除业务占用与泄漏。③比较配置要落到运行时：dev_disp 的 EsStdInit 行、sappfpar 输出、实际 profile（多次 grep 大小写/通配），不能只看文件大小或 WP 数（QAS WP 更多反而更省）。④无 root SSH 的主机可用 ABAP CALL 'SYSTEM' 以 <sid>adm 身份取 free/meminfo/dev_disp（注意 shell 重定向只作用于最后一条命令，多条命令要用子 shell 括起来）。
 
 【复用建议】排查"SAP 应用机内存高"：①free -m + /proc/meminfo（Shmem/Cached/Swap）②vmstat 看 si/so 是否在换页③sapcontrol ABAPGetWPTable 看是否有活跃用户/程序④dev_disp 看 EsStdInit 与内核 release⑤对比同配置正常机⑥结论按"内核行为/真实占用/泄漏"三分类给处置（调 em/initial_size_MB 或升内核）。
+
+
+## 2026-11-26 SAP 应用服务器内核升级：先用 R3trans 做零停机预检，再换目录
+
+【背景】广药 DEV 应用机内核 749（2016 构建）在启动期把 22GB ES 整段落成物理页（Shmem 29.87GB、可用 444MB），且跑 SLES15 属非官方组合。用户要求"把 QAS 的内核更过来"。QAS 现成内核 754 放在 /sapmnt/PRD/exe/uc/linuxx86_64。
+
+【做法】①先确认两边 ABAP 栈同版本（SAP_BASIS 750 SP06 / SAP_APPL 618），且 QAS 本来就跑 754＝同景观实证；②比文件清单，新内核 217 个文件对旧 201 个是严格超集（多 ICU57 全套/JS.SAR 等 16 个），零丢失风险；③**把新内核解到同盘 staging 目录，直接在里面跑 R3trans -d**（DIR_LIBRARY 和 LD_LIBRARY_PATH 都指 staging）→ 返回 0000 就证明新内核能在这台 OS 上跑、DBSL 能和现有 HANA 客户端连库，这一步把"换完起不来"的风险全部前置到零停机；④备份 profile+两个实例 exe 目录+内核目录改名，停实例，mv 换目录，chown，跑新 sapcpe 刷新 DIR_EXECUTABLE，再起。
+
+【教训】①SAP 的 DIR_CT_RUN 只是目录名，真正的内核文件在 /sapmnt/<SID>/exe/uc/linuxx86_64，/usr/sap/<SID>/SYS/exe/run→dbg 都是符号链接；②实例目录 /usr/sap/<SID>/<INST>/exe 里是**实拷贝**，必须用 sapcpe 刷新，只换 DIR_CT_RUN 会让实例继续跑旧二进制；③R3trans 找 DBSL 用的是 **DIR_LIBRARY**，不是 LD_LIBRARY_PATH，只改后者会报 2EETW169 "invalid values for DIR_LIBRARY"；④`su - <sid>adm -c` 在 csh 账号下 `export` 会报 Command not found，要加 `-s /bin/bash`；⑤sapcontrol 的 Stop 是异步的，返回 OK 只代表"已受理"，D00 实际要约 80s 才停干净，要等 disp+work 进程消失；⑥新内核会带 libicu*57.so 等运行库，缺了会报 "Could not open the ICU common library"；⑦老内核的 ES 是整段一次性落页，新内核按 4096MB 分块按需，升级后同一份 profile 下 Shmem 从 29.87GB 掉到 1.82GB、可用内存从 444MB 回到 28.7GB——"内存爆满"其实不用加内存也不用砍 em/initial_size_MB。
+
+【复用建议】任何 SAP 内核升级：先 staging + R3trans -d 预检 → 比对文件清单确认超集 → 备份 profile/实例 exe → 停实例（等进程真消失）→ 换 DIR_CT_RUN → chown → 新 sapcpe → 先起 ASCS 再起 DI → 验 dev_disp release / DBHDBSLIB 版本 / R3trans 0000 / ping 200 / WP 数 / 零 SIGSEGV；旧目录先改名保留，回退就是目录互换。

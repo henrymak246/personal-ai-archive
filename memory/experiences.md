@@ -901,3 +901,12 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①tp 的"已导入跳过"只对当前 import buffer 状态为已导入且本次未被重新入队的请求成立；当请求被重新加入队列（或通过 TMS_MGR_IMPORT_TR_REQUEST 定向导入）时，tp 会按 cofile 完整重导，不做版本新旧判断。②发现重导后，补救必须"按原始导入顺序"补导交集请求：先 DEVK904310（4 对象）→ DEVK904329（1 对象）→ DEVK904297（1 对象），顺序反了会把前一个请求刚补回的对象再次覆盖。③补导已导入请求时普通调用返回 0152 "Nothing done"（PRD TMSBUFFER IMPFLG='2'）；在 QAS 上用 TMS_MGR_FORWARD_TR_REQUEST 带 IMPORT_AGAIN 只改 QAS 侧看到的 PRD buffer，不改 PRD 本机 TMSBUFFER；正确开关是 PRD 上 `TMS_MGR_IMPORT_TR_REQUEST` 的 **IV_IMPORT_AGAIN='X'**（对应 STMS 的"再次导入"）。④验证不能只看 E070 时间戳或 rc，要逐字节对比：程序用 RPY_PROGRAM_READ 取源码算 md5、DDIC 用 DD03L 比字段、配置表用行集对比 QAS。⑤重导前先算风险面：用 E071 取该请求全部对象，与"该请求首次导入之后 PRD 又导入过的所有请求"求交集，交集对象就是会被降级的对象，按历史顺序规划补导。
 
 【复用建议】凡"传输单指向的请求在目标系统已有 E070 记录"的场景：先做交集分析再动手；若仍需重导，准备好补导清单和 IV_IMPORT_AGAIN='X' 的强制重导通道；终验以源码哈希/表行集与源系统一致为准，不要以"导入成功"作为闭环。
+
+
+## 2026-11-27 Word 表格宽度与分页的三个补充踩坑（python-docx）
+
+【背景】同一份 30 页实施计划，表格列宽明显不按设定渲染、表头孤零零留在页底、附录前加分页符多出空白页。
+
+【教训】①python-docx 的 `add_table` 只按页宽均分生成 `w:tblGrid`，仅设 `cell.width`（tcW）在 `tblLayout=fixed` 下**不生效**——Word 仍按 gridCol 等宽排，长文本列被压成一列窄条。必须在建表后按目标宽度回写每个 `w:gridCol` 的 `w:w`（`Cm(w).twips`）。②表头落单：给题注段落设 `keep_with_next`，并给表头行、第一数据行的所有段落设 `keep_with_next`，形成"题注+表头+前两行"的最小块，避免"表头在页底、数据在次页"。③附录前用 `doc.add_page_break()` 会插入一个空段落，若前一页刚好排满就多出一张全空白页；改用 `heading.paragraph_format.page_break_before = True`，由标题自身承担分页。④图片按页面宽度缩放时，画布越宽有效字号越小：13.2 英寸宽的 8.4pt 流程图缩到 16.4cm 只剩约 4pt；改为 9.4 英寸画布 + 两行布局后有效字号约 6.5pt，才达到可读下限。
+
+【复用建议】交付前的排版自检要加三项：表格列宽是否等于设定（读 docx 的 tblGrid/tcW 比对）、每页填充率（找 <45% 的孤儿页）、以及把所有表格的"题注→表头→首行"绑定后再看分页。

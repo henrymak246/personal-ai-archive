@@ -918,3 +918,14 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①SAPinst 报「ABAP processes of instance ... did not start after 10:10 minutes / instance reached state SHUTDOWN after having state ACTIVE」时，先查 `DEFAULT.PFL` 是否缺 `SAPDBHOST` 与 `dbs/hdb/dbname`——系统复制目标安装不会自动补这两个参数，dispatcher 能起但 disp+work 连不上库；补参重启后实例全绿（R3trans 0000、HTTP ping 200）。②直接改 USR02 设置口令时，除 `PWDSALTEDHASH` 外必须把 **`CODVN` 置 'H'**（加盐 SHA1）；`CODVN='B'` 时内核按遗留算法校验 `BCODE`、完全忽略你写入的加盐哈希，表现为「Name or password is incorrect」，哪怕哈希算法已用 John/hashcat 官方向量验证过也没用。③配套字段：BCODE 清零、PWDINITIAL=2、PWDCHGDATE=当天；`PWDSTATE=255` 在该系统是正常态（client 101 全库 731+ 用户同款），不要误判为锁定。④iSSHA-1 口径：`{x-issha,1024}` = base64(HV20 + salt12)，HV1=SHA1(P‖S)、HVn=SHA1(P‖HVn-1)，可用 John 测试向量自证。
 
 【复用建议】凡「恢复/复制来的系统无法登录、且手里有 DB 权限」的场景，先查 USR02 的 CODVN/PWDSTATE，再怀疑哈希算法；凡 SAPinst 卡在「启动实例」，先核对 DEFAULT.PFL 的数据库连接参数，再怀疑实例本身。
+
+
+## 2026-11-27 用 openpyxl 出客户报价单：从工作计划直接拆人天，以及无视觉条件下的版式自检
+
+【背景】奕成科技 HANA 内存扩容+版本升级的实施计划定稿后，要从同一份计划直接产出"实施服务报价单"，客户方要求 .xls。
+
+【做法】报价单 = 抬头与基本信息（单号·日期·有效期·客户·币种·报价方式·项目内容）→ 明细表（阶段·主要工作内容·交付物·人天·单价·金额·备注，8 个工作包）→ 费用汇总（小计·增值税·含税合计·大写）→ 付款方式（30-40-30，绑阶段4 接管与阶段7 验收）→ 报价说明（范围依据/包含/不含/人天口径/差旅/停机/工期/有效期/效力）→ 双方签章；第二个工作表把 8 个工作包再拆成 32 个工作项，标注责任方（乙方/双方），合计必须与明细表相等（15.5 人天）。
+
+【教训】①金额的口子要收在一处：单价只在首行填一次，其余行 `=$F$13` 引用；税率单独占一个单元格，税额 `=ROUND(小计*税率,2)`、合计 `=小计+税`。否则客户改一个价要改八处。②**人民币大写没法用公式**（Excel 只有泰铢的 BAHTTEXT），只能是固定文本——必须加批注"改价后手工同步"，并在交付话术里讲明。③openpyxl `merge_cells` 之后向**非左上角**单元格写值会抛 `MergedCell ... read-only`；封成 `block(row, c1, c2, value)`（先并、再只写左上角）可一次消灭这类崩溃，1×1 的"合并"要单独挡掉。④openpyxl 不会按内容自动调行高，行高必须自己估：`unicodedata.east_asian_width` 全角算 2、半角算 1，除以列宽容量再乘行高，否则两行文字会被裁掉半行。⑤存 .xls 用 `wb.SaveAs(path, FileFormat=56)`（xlExcel8），转完**必须重新导 PDF 比对页数与页内文本**，确认没有因格式降级错版（本次 4 页逐页一致）。
+
+【复用建议】本机 Read 图片返回 [Unsupported Image]，表格类交付物不能靠"看一眼"验收：Excel COM `ExportAsFixedFormat` 导 PDF → PyMuPDF 逐页取 block 坐标（判断哪几行落在哪页、页底余量、有无截断）→ 150dpi 像素众数核对填充色（表头/隔行/合计/章节条）。三项都过再交付。另：报价单里凡涉及金额（单价、税率、差旅包干）一律按占位值处理并在交付话术中点明，不擅自定价。

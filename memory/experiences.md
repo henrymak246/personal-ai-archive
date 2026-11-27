@@ -929,3 +929,19 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①金额的口子要收在一处：单价只在首行填一次，其余行 `=$F$13` 引用；税率单独占一个单元格，税额 `=ROUND(小计*税率,2)`、合计 `=小计+税`。否则客户改一个价要改八处。②**人民币大写没法用公式**（Excel 只有泰铢的 BAHTTEXT），只能是固定文本——必须加批注"改价后手工同步"，并在交付话术里讲明。③openpyxl `merge_cells` 之后向**非左上角**单元格写值会抛 `MergedCell ... read-only`；封成 `block(row, c1, c2, value)`（先并、再只写左上角）可一次消灭这类崩溃，1×1 的"合并"要单独挡掉。④openpyxl 不会按内容自动调行高，行高必须自己估：`unicodedata.east_asian_width` 全角算 2、半角算 1，除以列宽容量再乘行高，否则两行文字会被裁掉半行。⑤存 .xls 用 `wb.SaveAs(path, FileFormat=56)`（xlExcel8），转完**必须重新导 PDF 比对页数与页内文本**，确认没有因格式降级错版（本次 4 页逐页一致）。
 
 【复用建议】本机 Read 图片返回 [Unsupported Image]，表格类交付物不能靠"看一眼"验收：Excel COM `ExportAsFixedFormat` 导 PDF → PyMuPDF 逐页取 block 坐标（判断哪几行落在哪页、页底余量、有无截断）→ 150dpi 像素众数核对填充色（表头/隔行/合计/章节条）。三项都过再交付。另：报价单里凡涉及金额（单价、税率、差旅包干）一律按占位值处理并在交付话术中点明，不擅自定价。
+
+## 2026-11-27 SAP 授权：改了 profile 表，还得重建授权缓冲 USRBF2
+
+【背景】给新建系统 client 101 的 SAP* 补 SAP_ALL：`UST04` 插入 SAP_ALL、`USR04.PROFS='M SAP_ALL     '`（NRPRO=14），然后重启应用实例——RFC 登录仍报 `No RFC authorization for RFCPING`，权限一点没生效。
+
+【教训】内核做授权检查读的是持久化的**用户授权缓冲 `USRBF2`**（MANDT/BNAME/OBJCT/AUTH），不是每次从 UST04/USR10/UST12 现算；**重启实例只重载缓冲，不会按 profile 定义重建**。直改 profile 表后必须同批重建该用户的缓冲：本例做法=删掉该用户 USRBF2 行后 `INSERT ... SELECT` 同一 client 下等权用户（DDIC，已具 SAP_ALL）的 USRBF2 行（3626 行），重启后立即全通。反过来，走 SU01/PFCG 或 `BAPI_USER_PROFILES_ASSIGN` + 用户比较会自动刷新缓冲——这正是「用事务码就行、直接改表就不行」的根因。
+
+【复用建议】凡是用 SQL 直改 UST04/UST12/AGR_USERS 这类授权表，必须同一批处理里重建 USRBF2（或清空该用户行让内核重建），优先拷一个同 client、同权限态的等权用户当模板；验收要用真实 RFC 登录+读表端到端跑一遍，而不是只看表里有没有那一行。
+
+## 2026-11-27 SAP GUI 连不上新装系统：先看 firewalld 的 source 网段，而不是实例
+
+【背景】新装 PRD 应用服务器上 SAP Logon 连 3200 超时，同一台机器 ping 通、22 通；进机看 PAS 四个进程全 GREEN 自 10:41、3200/3300/8000 都 0.0.0.0 监听、机内 curl 8000=200。
+
+【教训】firewalld 只放行了 `10.150.67.0/24` 访问 SAP 端口，而客户端经 VPN 出网后源 IP 是 `172.16.0.28`（在服务器上 `ss` 看实证），被静默丢弃。加 rich rule 时用 `--add-rich-rule` 逐条加 runtime + permanent、**不要带 `--reload`**，否则会把别人加的运行时规则一起清掉（本案例就发现另外两台 runtime 比 permanent 少两段端口，业务网段当前连不上 AAS/enqueue）。
+
+【复用建议】「服务端没起 vs 网络不通」的定案顺序：机内进程状态 → 机内监听 → **机内 curl 自测** → 客户端 ping/SSH → 在服务器上 `ss` 看客户端真实源 IP → 比对 firewalld source 网段。前三步过、客户端不通，基本就是防火墙按源 IP 丢包，而不是实例问题。

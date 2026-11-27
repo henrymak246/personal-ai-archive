@@ -910,3 +910,11 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①python-docx 的 `add_table` 只按页宽均分生成 `w:tblGrid`，仅设 `cell.width`（tcW）在 `tblLayout=fixed` 下**不生效**——Word 仍按 gridCol 等宽排，长文本列被压成一列窄条。必须在建表后按目标宽度回写每个 `w:gridCol` 的 `w:w`（`Cm(w).twips`）。②表头落单：给题注段落设 `keep_with_next`，并给表头行、第一数据行的所有段落设 `keep_with_next`，形成"题注+表头+前两行"的最小块，避免"表头在页底、数据在次页"。③附录前用 `doc.add_page_break()` 会插入一个空段落，若前一页刚好排满就多出一张全空白页；改用 `heading.paragraph_format.page_break_before = True`，由标题自身承担分页。④图片按页面宽度缩放时，画布越宽有效字号越小：13.2 英寸宽的 8.4pt 流程图缩到 16.4cm 只剩约 4pt；改为 9.4 英寸画布 + 两行布局后有效字号约 6.5pt，才达到可读下限。
 
 【复用建议】交付前的排版自检要加三项：表格列宽是否等于设定（读 docx 的 tblGrid/tcW 比对）、每页填充率（找 <45% 的孤儿页）、以及把所有表格的"题注→表头→首行"绑定后再看分页。
+
+## 2026-11-27 SAP 系统复制目标安装：两个「看起来是密码问题，其实是版本字段」的坑
+
+【背景】广药新 PRD 应用层（EHP8 for SAP ERP 6.0 ABAP on HANA，SWPM 系统复制目标安装：HA 系统 ASCS+ERS + 附加应用服务器 02）装完后：SAPinst 最后的启动步骤报错，且手工设置 ABAP 用户口令后怎么都登不上。
+
+【教训】①SAPinst 报「ABAP processes of instance ... did not start after 10:10 minutes / instance reached state SHUTDOWN after having state ACTIVE」时，先查 `DEFAULT.PFL` 是否缺 `SAPDBHOST` 与 `dbs/hdb/dbname`——系统复制目标安装不会自动补这两个参数，dispatcher 能起但 disp+work 连不上库；补参重启后实例全绿（R3trans 0000、HTTP ping 200）。②直接改 USR02 设置口令时，除 `PWDSALTEDHASH` 外必须把 **`CODVN` 置 'H'**（加盐 SHA1）；`CODVN='B'` 时内核按遗留算法校验 `BCODE`、完全忽略你写入的加盐哈希，表现为「Name or password is incorrect」，哪怕哈希算法已用 John/hashcat 官方向量验证过也没用。③配套字段：BCODE 清零、PWDINITIAL=2、PWDCHGDATE=当天；`PWDSTATE=255` 在该系统是正常态（client 101 全库 731+ 用户同款），不要误判为锁定。④iSSHA-1 口径：`{x-issha,1024}` = base64(HV20 + salt12)，HV1=SHA1(P‖S)、HVn=SHA1(P‖HVn-1)，可用 John 测试向量自证。
+
+【复用建议】凡「恢复/复制来的系统无法登录、且手里有 DB 权限」的场景，先查 USR02 的 CODVN/PWDSTATE，再怀疑哈希算法；凡 SAPinst 卡在「启动实例」，先核对 DEFAULT.PFL 的数据库连接参数，再怀疑实例本身。

@@ -875,3 +875,21 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 【教训】①SAP 的 DIR_CT_RUN 只是目录名，真正的内核文件在 /sapmnt/<SID>/exe/uc/linuxx86_64，/usr/sap/<SID>/SYS/exe/run→dbg 都是符号链接；②实例目录 /usr/sap/<SID>/<INST>/exe 里是**实拷贝**，必须用 sapcpe 刷新，只换 DIR_CT_RUN 会让实例继续跑旧二进制；③R3trans 找 DBSL 用的是 **DIR_LIBRARY**，不是 LD_LIBRARY_PATH，只改后者会报 2EETW169 "invalid values for DIR_LIBRARY"；④`su - <sid>adm -c` 在 csh 账号下 `export` 会报 Command not found，要加 `-s /bin/bash`；⑤sapcontrol 的 Stop 是异步的，返回 OK 只代表"已受理"，D00 实际要约 80s 才停干净，要等 disp+work 进程消失；⑥新内核会带 libicu*57.so 等运行库，缺了会报 "Could not open the ICU common library"；⑦老内核的 ES 是整段一次性落页，新内核按 4096MB 分块按需，升级后同一份 profile 下 Shmem 从 29.87GB 掉到 1.82GB、可用内存从 444MB 回到 28.7GB——"内存爆满"其实不用加内存也不用砍 em/initial_size_MB。
 
 【复用建议】任何 SAP 内核升级：先 staging + R3trans -d 预检 → 比对文件清单确认超集 → 备份 profile/实例 exe → 停实例（等进程真消失）→ 换 DIR_CT_RUN → chown → 新 sapcpe → 先起 ASCS 再起 DI → 验 dev_disp release / DBHDBSLIB 版本 / R3trans 0000 / ping 200 / WP 数 / 零 SIGSEGV；旧目录先改名保留，回退就是目录互换。
+
+
+## 2026-11-27 HANA 扩容与大版本升级合并实施：路径设计的关键是"跨版本 SR 只能单向"
+
+【背景】奕成科技要求 PRD 双节点各加 384GB（1,024→1,408GB）、QAS 512→758GB，同时把 HANA 2.00.065 升到 2.00.089、OS 升到 SLES for SAP Applications 15 SP7。输出的是客户可执行的完整实施计划（Word+PDF，30 页）。
+
+【教训】①HANA SR 跨小版本只在"升级过渡期"受支持：065 主 + 089 备可以同步，但 089 一旦接管，065 旧主**无法作为低版本备机回挂**。所以"升级前用 089 备机做接管演练"是错误设计——演练会把旧主永久踢出复制链，必须回退到备份恢复。②内存扩容必须整机重启才生效（BIOS/DIMM 层面），与"换 OS/换 HANA 版本"天然同窗口，合并做只多花一次停机；拆开做反而多停一次。③滚动路径的最优形态：先建 089 备机（不影响生产）→ SR 追平 → 一次接管（停写 ≤15 分钟）→ 旧主下线加内存/重装 OS/装 089/回挂。全程只有一次业务停机。④global_allocation_limit=0 的自动公式是"前 64GB 的 90% + 其余 97%"，1,408GB 约得 1,361GB、758GB 约得 731GB；不要手工写死数值把上限压死。⑤HANA 许可是按内存授权的：加内存必须换 key（Note 1644792），SR 备机不单独计费（Note 2685661），但 SAP-HANA-ENF 会实测强制，key 不到位就不要接管。
+
+【复用建议】做"扩容+升级"合并方案时按五道门禁组织：许可 key、DIMM/BOM 与内存诊断、备份可恢复（hdbbackupcheck + QAS 还原预演）、SR 跨版本兼容（P0 核验 + QAS 预演）、应用连接（VIP/DNS/hdbclient/接口）。任何一门未过不进接管窗口；回退点只在"新主库尚未接受写入"之前有效，之后只能向前修。
+
+
+## 2026-11-27 Word/WPS 长文档生成：TOC 样式、页眉对齐与代码块防拆页的四个实招
+
+【背景】用 python-docx + Word COM 生成 30 页客户实施计划，反复出现目录 3 页、页眉版本号不右对齐、代码块跨页断开、附录孤立标题页等问题。
+
+【教训】①目录占几页由 **TOC 1/TOC 2 段落样式**决定，但这两个样式是"latent style"，新建文档里不存在（KeyError）；必须先让 Word 更新一次目录域并保存，样式才落进 styles.xml，之后才能用 python-docx 改字号/行距/缩进。顺序不能反。②WPS/Word 对页眉里手工 `<w:tab/>` + 右对齐制表位支持不稳（实测右对齐文本停在中间），改成**两列无框线表格**（左标题 12.8cm、右版本 3.6cm，仅下边框）100% 稳定。③代码块被跨页拆开：给除最后一行外的段落设 `keep_with_next=True`（仅对 ≤8 行的短块），配合 `keep_together`，短代码块就整体留在同一页。④附录孤页：在附录 A/B/C 前加分页符会造出"只剩一行"的空页，正确做法是让附录 A 紧跟正文流、只在小节之间控制分页，并把最后一个小节并入前一个命令小节。
+
+【复用建议】生成正式文档的验收脚本：PyMuPDF 逐页取文本，检查①总页数与预期②TOC 每条页码 vs 实际标题所在页逐条比对（能抓出"更新域后样式改动导致页码漂移"）③每页 text block 的 x0/x1 是否越过页边距（溢出扫描）④每页字符数找异常薄的孤儿页。四项全过再交付。

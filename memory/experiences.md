@@ -963,3 +963,11 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 教训：改 SAP 应用主机名/实例号不是只改 hostname——必须同步：①/etc/hosts 全节点（保留旧名别名兜底）②hdbuserstore 目录按主机名命名（/home/<sid>adm/.hdb/<hostname>）③实例目录（D02→D00）④/sapmnt/<SID>/profile 实例 profile 文件名与 _PF/_PFL 自引用 ⑤systemd 单元（SAPPRD_NN）与 /usr/sap/sapservices ⑥ERS 实例目录整体迁移且 profile 的 SCSHOST/SCSID 指向正确。改完先用 GetSystemInstanceList 看四行、再看 dev_ms 注册名是否为新 hostname_SID_00。同 SID 两台应用服务器都用 00 实例号没问题（注册名靠主机名区分）。关键收益：新主机名要与**恢复数据里的旧名**对齐——RZLLITAB 登录组、RFCDES 内部目的地按老系统主机名存储，改名后直接命中，省掉业务侧改配置；旧名会自动变成 SM59 残留（可删）。ERS 与 ASCS 同机时停机顺序变成先 ERS 后 ASCS。
 
 适用场景：SAP 系统复制/迁移后应用层改名、同 SID 多应用服务器重排、实例号复用。
+
+## 2026-11-28 SAP 同域多系统传输（TMS）：非共享 /usr/sap/trans 的同步与 tp 命令行的两个坑
+
+【背景】新建 PRD 替换老生产，TMS 域仍由 DEV 做控制者（DOMAIN_DEV）；新 PRD 的 /usr/sap/trans 是本地卷而非共享 NFS，域配置虽与 DEV 完全一致（TP_DOMAIN_DEV.PFL 双端逐字节相同），但 cofiles/data 各存一份，切换后 PRD 收不到 DEV/QAS 释放的传输文件。
+
+【教训】①传输内容同步只搬 cofiles/ 与 data/（按需加 bin 下的域参数文件），**绝不能同步 buffer、tmp、sapnames、ALOG**——buffer 是本系统待导入队列，覆盖等于篡改队列；②T-1 全量 + T+0 增量两轮，用两端文件数（本例 PRD 1,690/1,690 vs DEV 1,814/1,813）加抽样 md5 对账，首次导入前必须 ls 确认目标请求号的 cofiles/data 都在；③`tp connect <SID>` 不带 pf 会报 208「TPSETTINGS: transdir not set」，这是调用方式问题不是域故障，显式 `pf=/usr/sap/trans/bin/<域>.PFL` 后返回 0000；④tp 在实例 exe 目录（/usr/sap/<SID>/SYS/exe/uc/linuxx86_64/tp）而非 /usr/sap/trans/bin，且必须 `su - <sid>adm` 带环境执行；⑤从本系统 tp connect 其他 SID 报 233（TADIR not found）属正常，tp connect 只验本系统数据库，跨系统连通要用 STMS 的 TMS_CI_PING/RFC；⑥应用主机名变更会连带传输路径：DEV/QAS 的 hosts 把 PRD 应用名指到新应用 IP、防火墙放行 3200/3300，TMSADM 账号口令不变。
+
+【复用建议】SAP 系统搬迁/替换先厘清 TMS 三件事：域控制者是谁、trans 目录是否共享、cofiles/data 由谁同步。非共享目录的切换流程固定为「冻结释放 → T-1 全量 rsync → T-0 增量 → 文件数+md5 对账 → tp connect（带 pf）=0000 → 首批传输实测」，验证清单=STMS 域内系统表、域参数文件双端一致、队列条数、首次导入 ALOG。

@@ -955,3 +955,11 @@ DEV 在数据库主机改址后按 ASCS→D00 顺序启动。最终验收采用�
 另一个容易漏的点：恢复后的备份配置不是老系统的——自动日志备份开箱即跑，但落在实例目录所在系统盘且没有保留策略；老系统由外部 NetBackup 承担的每日全备不会随备份带过来，切换后必须重建并核对落盘位置与保留。
 
 适用场景：SAP HANA 系统迁移/系统复制重建、备份跨网传输的完成性判定、演练与切换窗口测算。
+
+## 2026-11-28 SAP 应用层改名/重排（主机名、实例号、ERS 合并）的可复制清单
+
+背景：新 PRD 演练后发现恢复库里的登录组与 RFC 内部目的地仍指向老生产主机名（sapprd1/sapprd2），而新装应用节点用的是安装期临时名（sapprdap01/sapprdap02、AAS 02、ERS 在另一台）；按业务要求把 .72/.73 改名为 sapprd1/sapprd2、AAS 02→00（ICM 8002→8000）、ERS11 迁到 ASCS 同机。
+
+教训：改 SAP 应用主机名/实例号不是只改 hostname——必须同步：①/etc/hosts 全节点（保留旧名别名兜底）②hdbuserstore 目录按主机名命名（/home/<sid>adm/.hdb/<hostname>）③实例目录（D02→D00）④/sapmnt/<SID>/profile 实例 profile 文件名与 _PF/_PFL 自引用 ⑤systemd 单元（SAPPRD_NN）与 /usr/sap/sapservices ⑥ERS 实例目录整体迁移且 profile 的 SCSHOST/SCSID 指向正确。改完先用 GetSystemInstanceList 看四行、再看 dev_ms 注册名是否为新 hostname_SID_00。同 SID 两台应用服务器都用 00 实例号没问题（注册名靠主机名区分）。关键收益：新主机名要与**恢复数据里的旧名**对齐——RZLLITAB 登录组、RFCDES 内部目的地按老系统主机名存储，改名后直接命中，省掉业务侧改配置；旧名会自动变成 SM59 残留（可删）。ERS 与 ASCS 同机时停机顺序变成先 ERS 后 ASCS。
+
+适用场景：SAP 系统复制/迁移后应用层改名、同 SID 多应用服务器重排、实例号复用。
